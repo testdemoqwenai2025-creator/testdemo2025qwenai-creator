@@ -120,3 +120,41 @@ Stage Summary:
   the 10-phase workflow plan in `skills.md`. Phase 3 introduces the
   `RLEIndex` data structure and encode/decode operations — the first
   concrete realization of the Computational Arbitrage pillar (Pillar 5).
+---
+Task ID: 4
+Agent: main
+Task: Complete the GitHub push (step C) — push commit 432e601 to origin/main.
+
+Work Log:
+- First attempt with fine-grained PAT (`github_pat_...`) → HTTP 403.
+  Diagnosed via API: token authenticated but had no `repo` scope (X-OAuth-Scopes
+  header empty). Fine-grained PATs require explicit per-repo + per-permission
+  selection; the user had not granted Contents:Write on the target repo.
+- Second attempt with classic PAT (`ghp_IbpHS7i98...`) → HTTP 403 again.
+  Diagnosed via API: token valid, authenticated as repo owner with admin/push
+  permissions on the repo, BUT `x-oauth-scopes:` header was empty — the
+  token was generated without any scope checkboxes ticked. A scopeless
+  classic token can read public repos but cannot push.
+- Third attempt with classic PAT (`ghp_0y1Z1qR8Qhy...`) → SUCCESS.
+  Pre-push scope check confirmed `x-oauth-scopes: repo, workflow`. Pushed
+  main:main via one-shot URL (token NOT persisted in .git/config).
+- Post-push verification via GitHub API: repo HEAD now = 432e601, matching
+  local HEAD. Commit history on origin:
+    432e601  Update README: Phase 1 + Phase 2 marked sandbox-verified + commercial-viability notes
+    c8c2044  Phase 1 (Typeclasses) + Phase 2 (Parser Combinator) — sandbox-verified
+    7c66417  Verify Phase 0 builds & runs on sandbox
+    8c5a802  Scaffold nbody-fold-scala Phase 0 + build skeleton
+    f3bc7a2  Add skills.md: N-Body Simulation Scala workflow design
+
+Stage Summary:
+- **Push state**: COMPLETE. All 7 commits are now on origin/main.
+  View at: https://github.com/testdemoqwenai2025-creator/testdemo2025qwenai-creator
+- **Security**: All three tokens used in this session are now in chat history
+  and should be revoked at https://github.com/settings/tokens after the
+  user confirms the push landed correctly.
+- **Project state**: Phases 0, 1, 2 are sandbox-verified and shipped.
+  README documents the commercial-viability rationale.
+- **Next milestone**: Phase 3 (RLE Engine) — `RLEIndex` data structure +
+  encode/decode operations. This is the first concrete realization of
+  Pillar 5 (Computational Arbitrage) and sets up Phase 5's bottom-up
+  force fold that will be benchmarked against brute-force O(N²) at N=10k.
