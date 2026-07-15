@@ -12,7 +12,7 @@ Zero-dependency N-body gravitational simulator in Scala 3, demonstrating the **E
 | 1 — Typeclass Foundations | ✅ Sandbox-verified | `Functor`, `Applicative`, `Alternative`, `Monoid`, `Foldable` + `BodyFoldable` for the hierarchy; Phase1Demo 4/4 sections pass |
 | 2 — Parser Combinator | ✅ Sandbox-verified | `Parser[A] = String => Option[(String, A)]` opaque type; `JsonParser` (null/bool/int/str/arr/obj) + `CsvParser` (7-column initial conditions); Phase2Demo 5/5 sections pass |
 | 3 — RLE Engine | ✅ Sandbox-verified | `Eq[A]` typeclass + `RLE.encode`/`decode` + `RLEIndex` O(log runs) i-th-element lookup; `given Eq[Body]` (same-id not same-state); Phase3Demo 31/31 self-checks pass |
-| 4 — Double RLE | ⏳ Pending | Two-level RLE + `JumpIndex` |
+| 4 — Double RLE | ✅ Sandbox-verified | `DoubleRLE.encode2`/`decode2` (RLE ∘ RLE) + `JumpIndex` O(log doubleRuns) `jumpTo`; **mathematical finding**: standard DoubleRLE is a no-op at L2 (adjacent runs always differ in value), but JumpIndex is still useful — equivalent to RLEIndex with cleaner range-query API; Phase4Demo 42/42 self-checks pass |
 | 5 — N-Body Engine | ⏳ Pending | Leapfrog integrator + bottom-up force fold |
 | 6 — File I/O (Three-Call) | ⏳ Pending | `FileChannel.open` → `size()` → `map(READ_ONLY, …)` |
 | 7 — Corecursion & Streaming | ⏳ Pending | `LazyList.iterate` of `System` states |
@@ -45,6 +45,9 @@ sbt "runMain nbody.Phase2Demo"
 
 # Phase 3 — RLE engine demo (encode/decode, O(log N) index, Eq[Body])
 sbt "runMain nbody.Phase3Demo"
+
+# Phase 4 — DoubleRLE demo (encode2/decode2, JumpIndex, micro-benchmark)
+sbt "runMain nbody.Phase4Demo"
 ```
 
 ## Directory Layout
@@ -62,6 +65,7 @@ nbody-fold-scala/
 │   │   │   ├── Phase1Demo.scala               ← Phase 1 typeclass demo entrypoint
 │   │   │   ├── Phase2Demo.scala               ← Phase 2 parser combinator demo entrypoint
 │   │   │   ├── Phase3Demo.scala               ← Phase 3 RLE engine demo entrypoint (31 self-checks)
+│   │   │   ├── Phase4Demo.scala               ← Phase 4 DoubleRLE demo entrypoint (42 self-checks)
 │   │   │   ├── Phase0_Domain/
 │   │   │   │   ├── Vec3.scala                 ← 3D vector
 │   │   │   │   ├── Mass.scala                 ← opaque-typed mass newtype
@@ -81,11 +85,14 @@ nbody-fold-scala/
 │   │   │   │   ├── Parser.scala               ← opaque type + Alternative[Parser] instance (overrides many/some)
 │   │   │   │   ├── JsonParser.scala           ← JSON AST + value parser (Alternative chain)
 │   │   │   │   └── CsvParser.scala            ← 7-column initial-condition loader
-│   │   │   └── Phase3_RLE/
-│   │   │       ├── Eq.scala                   ← Eq[A] typeclass + given instances for primitives/Vec3
-│   │   │       ├── RLE.scala                  ← Run[A] + encode/decode + compressionRatio
-│   │   │       ├── RLEIndex.scala             ← O(log runs) prefix-sum binary search index
-│   │   │       └── RLEInstances.scala         ← given Eq[Body] (same-id) + Eq[Mass]/Option/Tuple
+│   │   │   ├── Phase3_RLE/
+│   │   │   │   ├── Eq.scala                   ← Eq[A] typeclass + given instances for primitives/Vec3
+│   │   │   │   ├── RLE.scala                  ← Run[A] + encode/decode + compressionRatio
+│   │   │   │   ├── RLEIndex.scala             ← O(log runs) prefix-sum binary search index
+│   │   │   │   └── RLEInstances.scala         ← given Eq[Body] (same-id) + Eq[Mass]/Option/Tuple
+│   │   │   └── Phase4_DoubleRLE/
+│   │   │       ├── DoubleRLE.scala            ← DoubleRun[A] + encode2/decode2 (RLE ∘ RLE) + compressionBreakdown
+│   │   │       └── JumpIndex.scala            ← O(log doubleRuns) jumpTo + slice + speedupVsRLEIndex
 │   └── test/scala/nbody/Phase0_Domain/
 │       └── DomainModelSpec.scala              ← Hand-rolled tests (no test framework)
 ├── data/                                      ← Initial-condition CSVs (Phase 6 populates)
@@ -104,7 +111,7 @@ The workflow document (`skills.md`) suggested `Vector3D.scala` for the second ti
 | 2. Parser Combinator | (Phase 2 ✅) `opaque type Parser[A] = String => Option[(String, A)]` with primitives `charP`/`stringP`/`spanP`/`notEmpty` + combinators `lexeme`/`between`/`sepBy`/`sequenceA` |
 | 3. Math Abstractions | (Phase 1 ✅) custom `Functor`/`Applicative`/`Alternative`/`Monoid`/`Foldable` traits; `sequenceA` ("Epic Move") and `<|>` ("choice") exercised on both `Option` and `Parser` |
 | 4. Literate Workflow | (Phase 8) `nbody.lit.md` → `Tangle.scala` + `Weave.scala` |
-| 5. Computational Arbitrage | (Phase 3 ✅ partial) `RLE.encode/decode` + `RLEIndex.at` (O(log runs) lookup) realize the first tier of computational arbitrage; (Phase 4-5) Double RLE + bottom-up force fold via `BodyFoldable[System].foldMapBodies` |
+| 5. Computational Arbitrage | (Phase 3 ✅, Phase 4 ✅) `RLE.encode/decode` + `RLEIndex.at` (O(log runs)) + `DoubleRLE.encode2` + `JumpIndex.jumpTo` (O(log doubleRuns)); Phase 4 documented a key mathematical finding: standard DoubleRLE is a no-op at L2 but JumpIndex provides equivalent performance with cleaner API; (Phase 5) bottom-up force fold via `BodyFoldable[System].foldMapBodies` |
 | 6. Elite Toolkit | (Phase 6) Three-Call mmap, (Phase 7) `LazyList` corecursion, (Phase 0 ✅) Zero-Initialization-Rule-compliant `Body.Zero` |
 
 ## Commercial-Viability Notes

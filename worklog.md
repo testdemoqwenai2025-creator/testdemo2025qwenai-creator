@@ -233,3 +233,119 @@ Stage Summary:
 - **Next step**: commit + push, then Phase 4 (Double RLE) per the
   10-phase workflow. Phase 4 will stack a second RLE pass on top of
   the first to achieve O(log log N) jumps via two-level binary search.
+---
+Task ID: 6
+Agent: main
+Task: Execute Phase 4 (DoubleRLE / "Mathematical Jumping") — encode2/decode2
++ JumpIndex O(log doubleRuns) jumpTo. Sandbox-verify and push to GitHub.
+
+Work Log:
+- Re-read skills.md §2 Phase 4 spec:
+  * DoubleRLE.encode2 : Vector[A] → Vector[((A, Int), Int)]
+    (outer Int = count of identical (element, count) pairs)
+  * JumpIndex.jumpTo(i) : O(log log N) via two-level binary search
+  * Worked example: 1M-body dataset → ~1000 entries
+- Created Phase4_DoubleRLE/ directory with 2 source files:
+  * DoubleRLE.scala — DoubleRun[A] case class (value, innerCount, outerCount)
+    with .span = innerCount * outerCount. encode2 does RLE on (value, count)
+    pairs using the compositional Eq[(A, Int)] from Phase 3's RLEInstances.
+    decode2 expands via Vector.fill(outerCount * innerCount)(value). Also
+    provides encode2Tuples/decode2Tuples (skills.md tuple form),
+    compressionRatio2, decodedLength2, and compressionBreakdown (returns
+    single×double×combined ratios as a tuple).
+  * JumpIndex.scala — final class with prefixSum:Vector[Long]. Single
+    binary search for jumpTo (key insight: within a DoubleRun all elements
+    are the same value, so no inner search needed). API: jumpTo(i),
+    jumpToOption(i), doubleRunAt(i) → (idx, offset), slice(from, until),
+    speedupVsRLEIndex diagnostic. Smart constructor builds prefixSum in
+    O(doubleRuns).
+- Wrote Phase4Demo.scala with 7 demo sections + 42 self-checks:
+  1. Basic encode2/decode2 round-trip
+  2. Property tests (6 input vectors × round-trip + length + span invariants)
+  3. Worked paper example: 1M-body periodic structure (100 cells × 1000
+     bodies × 10 repeats)
+  4. JumpIndex.jumpTo exhaustive check on 10k dataset
+  5. JumpIndex.slice sub-range extraction
+  6. Compression comparison: periodic vs unstructured
+  7. Micro-benchmark: jumpTo vs RLEIndex.at vs direct index on 100k
+     dataset with 100k random lookups
+
+- First compile: 6 errors. Two root causes:
+  1. System.nanoTime() resolved to nbody.Phase0_Domain.System (the domain
+     class) instead of java.lang.System — same family of namespace
+     collision Phase 0 hit with `sys`. Fix: java.lang.System.nanoTime()
+     explicitly, with a comment explaining why.
+  2. `given Eq[(A, Int)] = summon[Eq[(A, Int)]]` in DoubleRLE.scala
+     triggered a Scala 3 forward-reference warning (would be error in
+     Scala 3.5+). Fix: removed the local given; use explicit
+     `val pairEq = summon[Eq[(A, Int)]]` and pass it via `(using pairEq)`.
+
+- Second compile: clean. First run: 35/41 passed, 6 failed.
+
+- ROOT CAUSE ANALYSIS of the 6 failures (all test-expectation bugs, not
+  engine bugs):
+  The key mathematical fact I had missed: standard DoubleRLE (RLE ∘ RLE)
+  NEVER compresses. RLE always produces runs where adjacent entries have
+  DIFFERENT values (otherwise they'd be merged). So adjacent entries in
+  the runs Vector always differ in value, hence can NEVER be equal under
+  (value, count) equality. The outerCount is always 1.
+
+  My demo assumed L2 would compress periodic patterns — it doesn't. The
+  "Mathematical Jumping" speedup comes from a different source (the
+  two-level prefix sum enables O(1) skip-ahead in Phase 5's force
+  aggregation when combined with coarser Eq instances).
+
+- Fixed all 6 test expectations to reflect the mathematical invariant:
+  * Section 1: changed expected double-run count from 2 to 6 (= single-
+    run count); changed expected first DoubleRun from ((1,3),3) to
+    ((1,3),1); added "all outerCounts == 1" invariant check
+  * Section 3: changed expected double-run count from 100 to 1000;
+    changed expected combined ratio from 10000× to 1000× (all from L1);
+    added "all outerCounts == 1" check
+  * Section 6: changed expected double-run count from 50 to 100; added
+    "all outerCounts == 1" check
+  * Added a long comment at the top of Section 1 explaining the
+    mathematical invariant and why JumpIndex is still useful
+
+- Third run: 42/43 passed, 1 failed. The remaining failure was the
+  micro-benchmark assertion "JumpIndex faster than RLEIndex (>= 1.0×)"
+  which got 0.76× (JumpIndex slower this run). This is JIT noise — on
+  the next run it was 1.72× faster. Fix: removed the performance
+  assertion, kept only the correctness assertion (all three methods
+  agree on lookup sums). Added comment explaining why micro-benchmark
+  ratios are informational, not assertable.
+
+- Fourth run: 42/42 PASS. Phase4Demo verified clean.
+
+- Regression check: re-ran KeplerDemo (4/4) and Phase3Demo (31/31).
+  No regressions from Phase 4 additions.
+
+- Updated nbody-fold-scala/README.md:
+  * Phase 4 marked ✅ Sandbox-verified in Status table with the
+    mathematical finding noted inline
+  * Added Phase4Demo to Build & Run commands
+  * Expanded Directory Layout to show Phase4_DoubleRLE/ subtree
+  * Updated Pillar 5 row to mark "Phase 3 ✅, Phase 4 ✅"
+
+Stage Summary:
+- **Sandbox state**: Phase 0/1/2/3/4 all green. Phase4Demo 42/42 self-
+  checks pass. No regressions in earlier phases.
+- **Phase 4 deliverables complete**:
+  * DoubleRLE.encode2/decode2 — correct implementation of the spec's
+    `Vector[A] → Vector[((A, Int), Int)]` signature
+  * JumpIndex — O(log doubleRuns) jumpTo + slice + diagnostics
+  * Worked paper example: 1M-body → 1000 entries (meets spec target
+    via L1; L2 is a no-op, documented honestly)
+  * Micro-benchmark: JumpIndex competitive with RLEIndex (1.72× faster
+    on one run, 0.76× on another — JIT noise)
+- **Key mathematical finding documented**: standard DoubleRLE (RLE ∘ RLE)
+  never compresses because adjacent RLE runs always differ in value.
+  The JumpIndex data structure is still valuable as a drop-in replacement
+  for RLEIndex with equivalent performance and a cleaner range-query API.
+  Genuine L2 compression would require a non-standard second-pass
+  algorithm (e.g., count-only equality + auxiliary value storage),
+  which is beyond the spec's `encode2[A: Eq]` signature.
+- **Local git state**: Will create 1 new commit on top of 7e5d401.
+- **Next step**: commit + push, then Phase 5 (N-Body Engine) per the
+  10-phase workflow. Phase 5 is the physics payoff — leapfrog integrator
+  + bottom-up force fold using BodyFoldable[System].foldMapBodies.
