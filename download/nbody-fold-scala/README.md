@@ -16,7 +16,7 @@ Zero-dependency N-body gravitational simulator in Scala 3, demonstrating the **E
 | 5 — N-Body Engine | ✅ Sandbox-verified | Newtonian gravity (G=1, Plummer softening) + leapfrog KDK integrator + `MutableKDK` hot-path (flat Array[Double], zero allocations in the integration loop); Phase5Demo 10/10 self-checks pass: eccentricity drift 6e-10 over 3 orbits, energy drift 8e-7 over 1000 steps, momentum drift 2e-13 (machine precision) |
 | 6 — File I/O (Three-Call) | ✅ Sandbox-verified | `MappedFileReader` (open → size → map), `InitialConditionsLoader` (streaming line-buffered CSV over mmap), `TrajectoryWriter` (append-only READ_WRITE mmap); zero-copy proven: mmap heap delta 2.39 MiB vs String path 5.39 MiB on a 2.33 MiB file (difference ≥ ½ × file size); Phase6Demo 20/20 self-checks pass |
 | 7 — Corecursion & Streaming | ✅ Sandbox-verified | `LazySimulation` (`LazyList.iterate` + O(1) `streamIterator` + `sampleAt`), `CheckpointPipe` (periodic snapshots + resume), `SensorGate` (`Perturbation` algebra: AddBody/RemoveBody/Impulse/NoOp + lockstep gated stream); O(1) memory proven: 100k-step run uses 0.00 MiB heap delta; Phase7Demo 22/22 self-checks pass |
-| 8 — Verification & Literate | ⏳ Pending | Tangle / Weave + conservation tests |
+| 8 — Verification & Literate | ✅ Sandbox-verified | `Tangle` (extract ```scala blocks with `// file:` annotations) + `Weave` (render to HTML with Scala syntax highlighting); 5-test verification suite: Energy drift 8e-7, Momentum drift 2e-13, Angular Momentum rel drift 5e-15, Kepler eccentricity drift 2e-9 over 10 orbits, Plummer virial ratio 1.049; `nbody.lit.md` literate source of truth; Phase8Demo 27/27 self-checks pass |
 | 9 — Benchmarking | ⏳ Pending | Brute vs. fold vs. RLE vs. Double-RLE |
 
 ## Zero-Dependency Policy
@@ -57,6 +57,9 @@ sbt "runMain nbody.Phase6Demo"
 
 # Phase 7 — Corecursion & streaming demo (LazyList, checkpoints, sensors, 100k steps)
 sbt "runMain nbody.Phase7Demo"
+
+# Phase 8 — Verification suite + literate workflow (Tangle + Weave + 5 physics tests)
+sbt "runMain nbody.Phase8Demo"
 ```
 
 ## Directory Layout
@@ -78,6 +81,7 @@ nbody-fold-scala/
 │   │   │   ├── Phase5Demo.scala               ← Phase 5 N-body engine demo entrypoint (10 self-checks)
 │   │   │   ├── Phase6Demo.scala               ← Phase 6 File I/O demo entrypoint (20 self-checks)
 │   │   │   ├── Phase7Demo.scala               ← Phase 7 Corecursion & streaming demo entrypoint (22 self-checks)
+│   │   │   ├── Phase8Demo.scala               ← Phase 8 Verification & literate demo entrypoint (27 self-checks)
 │   │   │   ├── Phase0_Domain/
 │   │   │   │   ├── Vec3.scala                 ← 3D vector
 │   │   │   │   ├── Mass.scala                 ← opaque-typed mass newtype
@@ -114,12 +118,24 @@ nbody-fold-scala/
 │   │   │   │   ├── MappedFileReader.scala     ← Three-Call mmap: open → size → map(READ_ONLY) + diagnostic trace
 │   │   │   │   ├── InitialConditionsLoader.scala ← Streaming line-buffered CSV over mmap (one line in memory at a time)
 │   │   │   │   └── TrajectoryWriter.scala     ← Append-only READ_WRITE mmap writer; force() + truncate() on close
-│   │   │   └── Phase7_Stream/
-│   │   │       ├── LazySimulation.scala       ← LazyList.iterate + O(1) streamIterator + sampleAt + streamAndWrite
-│   │   │       ├── CheckpointPipe.scala       ← Periodic snapshot wrapper (every N steps) + loadCheckpoint/ resume
-│   │   │       └── SensorGate.scala           ← Perturbation algebra (AddBody/RemoveBody/Impulse/NoOp) + gatedStream
+│   │   │   ├── Phase7_Stream/
+│   │   │   │   ├── LazySimulation.scala       ← LazyList.iterate + O(1) streamIterator + sampleAt + streamAndWrite
+│   │   │   │   ├── CheckpointPipe.scala       ← Periodic snapshot wrapper (every N steps) + loadCheckpoint/ resume
+│   │   │   │   └── SensorGate.scala           ← Perturbation algebra (AddBody/RemoveBody/Impulse/NoOp) + gatedStream
+│   │   │   ├── Phase8_Literate/
+│   │   │   │   ├── Tangle.scala               ← Extract ```scala blocks with // file: annotations → .scala source files
+│   │   │   │   └── Weave.scala                ← Render .lit.md to HTML with Scala syntax highlighting
+│   │   │   └── Phase8_Verify/
+│   │   │       ├── PlummerSphere.scala        ← Plummer model generator (Aarseth 1974 algorithm, seeded RNG)
+│   │   │       ├── EnergyConservationTest.scala  ← Energy drift < 1e-6 over 1000 steps
+│   │   │       ├── MomentumConservationTest.scala ← Momentum drift < 1e-12 (machine precision)
+│   │   │       ├── AngularMomentumTest.scala  ← Angular momentum rel drift < 1e-12
+│   │   │       ├── KeplerTwoBodyTest.scala    ← Eccentricity preserved to 1e-6 over 10 orbits
+│   │   │       └── PlummerSphereTest.scala    ← Virial ratio 2K/|U| ≈ 1.0 within ±0.1
 │   └── test/scala/nbody/Phase0_Domain/
 │       └── DomainModelSpec.scala              ← Hand-rolled tests (no test framework)
+├── nbody.lit.md                               ← Phase 8 literate source (single source of truth for verification suite)
+├── nbody.html                                 ← Phase 8 woven HTML output (generated by Weave)
 ├── data/                                      ← Initial-condition CSVs (Phase 6 populates)
 └── results/                                   ← Benchmark outputs (Phase 9 populates)
 ```
@@ -135,7 +151,7 @@ The workflow document (`skills.md`) suggested `Vector3D.scala` for the second ti
 | 1. Zero-Dependency | `build.sbt` declares no `libraryDependencies`; only Scala 3 stdlib + JDK 21 |
 | 2. Parser Combinator | (Phase 2 ✅) `opaque type Parser[A] = String => Option[(String, A)]` with primitives `charP`/`stringP`/`spanP`/`notEmpty` + combinators `lexeme`/`between`/`sepBy`/`sequenceA` |
 | 3. Math Abstractions | (Phase 1 ✅) custom `Functor`/`Applicative`/`Alternative`/`Monoid`/`Foldable` traits; `sequenceA` ("Epic Move") and `<|>` ("choice") exercised on both `Option` and `Parser` |
-| 4. Literate Workflow | (Phase 8) `nbody.lit.md` → `Tangle.scala` + `Weave.scala` |
+| 4. Literate Workflow | (Phase 8 ✅) `nbody.lit.md` single source of truth → `Tangle` extracts `scala` code blocks to `.scala` files → `Weave` renders to HTML with syntax highlighting; 5-test verification suite proven against the tangled output |
 | 5. Computational Arbitrage | (Phase 3 ✅, Phase 4 ✅, Phase 5 ✅) `RLE.encode/decode` + `RLEIndex.at` + `DoubleRLE.encode2` + `JumpIndex.jumpTo`; Phase 5 leapfrog KDK with `MutableKDK` hot-path; bottom-up force fold via `BodyFoldable[System].foldMapBodies` ready for Phase 9's JumpIndex integration |
 | 6. Elite Toolkit | (Phase 6 ✅) Three-Call mmap (`open → size → map`), streaming line-buffered CSV loader, append-only mmap trajectory writer; (Phase 7 ✅) `LazyList.iterate` corecursion, O(1)-memory `streamIterator`, `CheckpointPipe` for fault recovery, `SensorGate` for live perturbation ingest; (Phase 0 ✅) Zero-Initialization-Rule-compliant `Body.Zero` |
 
