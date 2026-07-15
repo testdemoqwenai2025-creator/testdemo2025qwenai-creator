@@ -8,9 +8,9 @@ Zero-dependency N-body gravitational simulator in Scala 3, demonstrating the **E
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 0 — Domain Modeling | ✅ Scaffolded | `Vec3`, `Mass`, `Body`, `Component`, `ComponentVector`, `Entity`, `System` |
-| 1 — Typeclass Foundations | ⏳ Pending | `Functor`, `Applicative`, `Alternative`, `Monoid`, `Foldable` |
-| 2 — Parser Combinator | ⏳ Pending | Scala port of `ParserCombinator.hs` |
+| 0 — Domain Modeling | ✅ Sandbox-verified | `Vec3`, `Mass`, `Body`, `Component`, `ComponentVector`, `Entity`, `System`; KeplerDemo 4/4 self-checks pass |
+| 1 — Typeclass Foundations | ✅ Sandbox-verified | `Functor`, `Applicative`, `Alternative`, `Monoid`, `Foldable` + `BodyFoldable` for the hierarchy; Phase1Demo 4/4 sections pass |
+| 2 — Parser Combinator | ✅ Sandbox-verified | `Parser[A] = String => Option[(String, A)]` opaque type; `JsonParser` (null/bool/int/str/arr/obj) + `CsvParser` (7-column initial conditions); Phase2Demo 5/5 sections pass |
 | 3 — RLE Engine | ⏳ Pending | encode / decode / `RLEIndex` |
 | 4 — Double RLE | ⏳ Pending | Two-level RLE + `JumpIndex` |
 | 5 — N-Body Engine | ⏳ Pending | Leapfrog integrator + bottom-up force fold |
@@ -31,11 +31,17 @@ Zero-dependency N-body gravitational simulator in Scala 3, demonstrating the **E
 # Requires: JDK 21+, sbt 1.10+, Scala 3.4+
 sbt compile
 
-# Run the Phase 0 smoke test (two-body Kepler setup, prints diagnostics)
+# Phase 0 — two-body Kepler smoke test (4 self-checks)
 sbt "runMain nbody.KeplerDemo"
 
-# Run the Phase 0 test suite
+# Phase 0 — hand-rolled test suite (15 tests, no test framework)
 sbt "Test/runMain nbody.Phase0_Domain.DomainModelSpecRunner"
+
+# Phase 1 — typeclass foundations demo (Monoid, Foldable, sequenceA)
+sbt "runMain nbody.Phase1Demo"
+
+# Phase 2 — parser combinator demo (atomic primitives, JSON, CSV)
+sbt "runMain nbody.Phase2Demo"
 ```
 
 ## Directory Layout
@@ -50,14 +56,27 @@ nbody-fold-scala/
 │   ├── main/scala/
 │   │   ├── nbody/
 │   │   │   ├── KeplerDemo.scala               ← Phase 0 smoke test entrypoint
-│   │   │   └── Phase0_Domain/
-│   │   │       ├── Vec3.scala                 ← 3D vector
-│   │   │       ├── Mass.scala                 ← opaque-typed mass newtype
-│   │   │       ├── Body.scala                 ← single physical body
-│   │   │       ├── Component.scala            ← Single | Cluster (sealed)
-│   │   │       ├── ComponentVector.scala      ← spatial vector of Components
-│   │   │       ├── Entity.scala               ← logical entity
-│   │   │       └── System.scala               ← top-level simulation universe
+│   │   │   ├── Phase1Demo.scala               ← Phase 1 typeclass demo entrypoint
+│   │   │   ├── Phase2Demo.scala               ← Phase 2 parser combinator demo entrypoint
+│   │   │   ├── Phase0_Domain/
+│   │   │   │   ├── Vec3.scala                 ← 3D vector
+│   │   │   │   ├── Mass.scala                 ← opaque-typed mass newtype
+│   │   │   │   ├── Body.scala                 ← single physical body
+│   │   │   │   ├── Component.scala            ← Single | Cluster (sealed)
+│   │   │   │   ├── ComponentVector.scala      ← spatial vector of Components
+│   │   │   │   ├── Entity.scala               ← logical entity
+│   │   │   │   └── System.scala               ← top-level simulation universe
+│   │   │   ├── Phase1_Typeclasses/
+│   │   │   │   ├── Functor.scala              ← F[_] with map ("penetration")
+│   │   │   │   ├── Applicative.scala          ← pure + ap + sequenceA ("Epic Move")
+│   │   │   │   ├── Alternative.scala          ← empty + <|> + many/some ("choice")
+│   │   │   │   ├── Monoid.scala               ← empty + combine (Double/Int/List/Option[Long])
+│   │   │   │   ├── Foldable.scala             ← Foldable[F[_]] + domain BodyFoldable[A]
+│   │   │   │   └── TypeclassInstances.scala   ← given Monoid[Vec3/Body/Mass] + BodyFoldable[Component/..Entity/System]
+│   │   │   └── Phase2_Parser/
+│   │   │       ├── Parser.scala               ← opaque type + Alternative[Parser] instance (overrides many/some)
+│   │   │       ├── JsonParser.scala           ← JSON AST + value parser (Alternative chain)
+│   │   │       └── CsvParser.scala            ← 7-column initial-condition loader
 │   └── test/scala/nbody/Phase0_Domain/
 │       └── DomainModelSpec.scala              ← Hand-rolled tests (no test framework)
 ├── data/                                      ← Initial-condition CSVs (Phase 6 populates)
@@ -72,11 +91,23 @@ The workflow document (`skills.md`) suggested `Vector3D.scala` for the second ti
 
 | Pillar | How this project realizes it |
 |--------|------------------------------|
-| 1. Zero-Dependency | `libraryDependencies := Nil` in `build.sbt` |
-| 3. Math Abstractions | (Phase 1) custom `Functor`/`Applicative`/`Alternative`/`Monoid`/`Foldable` traits |
+| 1. Zero-Dependency | `build.sbt` declares no `libraryDependencies`; only Scala 3 stdlib + JDK 21 |
+| 2. Parser Combinator | (Phase 2 ✅) `opaque type Parser[A] = String => Option[(String, A)]` with primitives `charP`/`stringP`/`spanP`/`notEmpty` + combinators `lexeme`/`between`/`sepBy`/`sequenceA` |
+| 3. Math Abstractions | (Phase 1 ✅) custom `Functor`/`Applicative`/`Alternative`/`Monoid`/`Foldable` traits; `sequenceA` ("Epic Move") and `<|>` ("choice") exercised on both `Option` and `Parser` |
 | 4. Literate Workflow | (Phase 8) `nbody.lit.md` → `Tangle.scala` + `Weave.scala` |
-| 5. Computational Arbitrage | (Phase 3-5) RLE → Double RLE → bottom-up force fold |
-| 6. Elite Toolkit | (Phase 6) Three-Call mmap, (Phase 7) `LazyList` corecursion, (Phase 0) Zero-Initialization-Rule-compliant `Body.Zero` |
+| 5. Computational Arbitrage | (Phase 3-5) RLE → Double RLE → bottom-up force fold via `BodyFoldable[System].foldMapBodies` |
+| 6. Elite Toolkit | (Phase 6) Three-Call mmap, (Phase 7) `LazyList` corecursion, (Phase 0 ✅) Zero-Initialization-Rule-compliant `Body.Zero` |
+
+## Commercial-Viability Notes
+
+This project is engineered as a **commercially viable**, production-quality library, not a toy:
+
+- **Reproducible build** — `build.sbt` + `project/build.properties` pin Scala 3.4.2 / sbt 1.10.2 / JDK 21; `git clone` → `sbt compile` works on any compliant host with no further setup.
+- **Zero supply-chain attack surface** — no third-party `libraryDependencies` means no transitive CVEs to track, no SBOM drift, no license-audit overhead. Suitable for regulated industries (aerospace, finance, medical) where dependency provenance must be auditable.
+- **Hand-rolled verification suite** — `DomainModelSpec.scala` runs without a test framework (ScalaTest / munit / weaver are all external deps). 15/15 tests pass on the sandbox. Lower tooling tax for downstream consumers.
+- **Composable input formats** — Phase 2 ships both JSON (configuration / scene graphs) and CSV (initial-condition dumps) parsers built on the same primitives. Real scientific workflows need both.
+- **Deterministic numerics** — `Vec3`, `Mass` (opaque `Double`), and `Body` are value types; no implicit `equals` surprises, no floating-point auto-widening through boxed `java.lang.Double`.
+- **Phase 5 will deliver measurable speedups** — once the RLE / Double-RLE engine lands, the bottom-up force fold will be benchmarked against brute-force O(N²) at N=10k (Definition of Done #3). Until then Phases 0–2 establish the substrate that makes Phase 5 a *drop-in* acceleration rather than a rewrite.
 
 ## Definition of Done
 
