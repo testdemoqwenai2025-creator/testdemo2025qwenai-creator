@@ -17,7 +17,7 @@ final case class Body(
   id:   Long,
   mass: Mass,
   pos:  Vec3,
-  vel:  Vec3,
+  vel:  Vec3 = Vec3.Zero,
   acc:  Vec3 = Vec3.Zero
 ):
   def withAcc(newAcc: Vec3): Body = copy(acc = newAcc)

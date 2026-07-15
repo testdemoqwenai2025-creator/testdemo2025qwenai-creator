@@ -17,21 +17,33 @@ import scala.math.{sqrt, Pi}
 
 object KeplerDemo:
 
-  // Two-body Kepler problem in natural units (G = 1).
-  // Heavy central mass M, light orbiting mass m.
-  // Circular orbit radius r, orbital speed v = sqrt(G*M/r).
+  // Two-body Kepler problem in natural units (G = 1), set up in the
+  // CENTER-OF-MOMENTUM frame so linear momentum is exactly zero.
+  //
+  // For a circular orbit with separation r and total mass M+m:
+  //   relative orbital speed  v = sqrt(G * (M+m) / r)
+  //   heavy body position     r1 = -m/(M+m) * r̂
+  //   light body position     r2 = +M/(M+m) * r̂
+  //   heavy body velocity     v1 = -m/(M+m) * v_perp
+  //   light body velocity     v2 = +M/(M+m) * v_perp
   def main(args: Array[String]): Unit =
 
     val G    = 1.0
     val M    = Mass(1000.0)
     val m    = Mass(1.0)
+    val Mtot = M.value + m.value
     val r    = 10.0
-    val v    = sqrt(G * M.value / r)   // circular orbit speed
+    val v    = sqrt(G * Mtot / r)               // relative circular-orbit speed
 
-    // Body 1 (heavy): at origin, at rest
-    val b1 = Body(id = 1L, mass = M, pos = Vec3.Zero, vel = Vec3.Zero)
-    // Body 2 (light): at (r, 0, 0), velocity (0, v, 0)
-    val b2 = Body(id = 2L, mass = m, pos = Vec3(r, 0.0, 0.0), vel = Vec3(0.0, v, 0.0))
+    val r1 = -m.value / Mtot * r                // heavy body offset from CoM
+    val r2 =  M.value / Mtot * r                // light body offset from CoM
+    val v1 = -m.value / Mtot * v                // heavy body velocity
+    val v2 =  M.value / Mtot * v                // light body velocity
+
+    // Body 1 (heavy): on -x axis, moving in -y direction
+    val b1 = Body(id = 1L, mass = M, pos = Vec3(r1, 0.0, 0.0), vel = Vec3(0.0, v1, 0.0))
+    // Body 2 (light): on +x axis, moving in +y direction
+    val b2 = Body(id = 2L, mass = m, pos = Vec3(r2, 0.0, 0.0), vel = Vec3(0.0, v2, 0.0))
 
     // Build the hierarchy bottom-up
     val c1   = Component.Single(b1)
@@ -40,37 +52,42 @@ object KeplerDemo:
     val cv2  = ComponentVector(Vector(c2))
     val star = Entity(id = 1L, componentVectors = Vector(cv1))
     val plnt = Entity(id = 2L, componentVectors = Vector(cv2))
-    val sys  = System(Vector(star, plnt))
+    val system = System(Vector(star, plnt))
 
     // ── Print the system snapshot ─────────────────────────────────────────
     println("=== nbody-fold-scala — Phase 0 Kepler Demo ===")
     println()
-    println(sys)
+    println(system)
     println()
     println(s"  Body 1: ${b1}")
     println(s"  Body 2: ${b2}")
     println()
 
     // ── Sanity checks ─────────────────────────────────────────────────────
-    val expectedTotalMass = M.value + m.value
-    val expectedCoM = b2.pos * (m.value / expectedTotalMass)  // CoM offset from heavy body
-    val expectedL   = m.value * r * v                          // angular momentum magnitude
+    val expectedTotalMass = Mtot
+    val expectedCoM = Vec3.Zero                                  // CoM frame ⇒ CoM at origin
+    val expectedL   = m.value * M.value / Mtot * r * v           // reduced-mass L = μ·r·v, μ = mM/(M+m)
+
+    // Extract values to locals so the f-interpolator doesn't choke on the
+    // `=` inside ${expr} when followed by a format spec.
+    val U = system.potentialEnergy(softening = 0.001)
+    val E = system.totalEnergy(softening = 0.001)
 
     println("--- Diagnostics ---")
-    println(f"  Total mass        : ${sys.totalMass.value}%.4f  (expected $expectedTotalMass%.4f)")
-    println(f"  Center of mass    : ${sys.centerOfMass}  (expected $expectedCoM)")
-    println(f"  Kinetic energy    : ${sys.kineticEnergy}%.6e")
-    println(f"  Potential energy  : ${sys.potentialEnergy(softening = 0.001)%.6e")
-    println(f"  Total energy      : ${sys.totalEnergy(softening = 0.001)%.6e")
-    println(f"  Linear momentum   : ${sys.linearMomentum}  (expected Vec3.Zero)")
-    println(f"  Angular momentum  : ${sys.angularMomentum}  (magnitude expected $expectedL%.6e)")
+    println(f"  Total mass        : ${system.totalMass.value}%.4f  (expected $expectedTotalMass%.4f)")
+    println(s"  Center of mass    : ${system.centerOfMass}  (expected $expectedCoM)")
+    println(f"  Kinetic energy    : ${system.kineticEnergy}%.6e")
+    println(f"  Potential energy  : $U%.6e")
+    println(f"  Total energy      : $E%.6e")
+    println(s"  Linear momentum   : ${system.linearMomentum}  (expected Vec3.Zero — CoM frame)")
+    println(f"  Angular momentum  : ${system.angularMomentum}  (magnitude expected $expectedL%.6e)")
     println()
 
     // ── Verify the bottom-up aggregation matches direct body computation ──
-    val massOK   = math.abs(sys.totalMass.value - expectedTotalMass) < 1e-12
-    val momOK    = sys.linearMomentum.norm < 1e-9
-    val angOK    = math.abs(sys.angularMomentum.norm - expectedL) / expectedL < 1e-9
-    val bodyCntOK = sys.countBodies == 2
+    val massOK   = math.abs(system.totalMass.value - expectedTotalMass) < 1e-12
+    val momOK    = system.linearMomentum.norm < 1e-9
+    val angOK    = math.abs(system.angularMomentum.norm - expectedL) / expectedL < 1e-9
+    val bodyCntOK = system.countBodies == 2
 
     println("--- Self-checks ---")
     println(s"  [${if massOK   then "PASS" else "FAIL"}] total mass matches M + m")
