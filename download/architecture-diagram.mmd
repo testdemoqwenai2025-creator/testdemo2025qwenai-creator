@@ -1,0 +1,56 @@
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'primaryColor': '#EFF6FF',
+    'primaryTextColor': '#1F2937',
+    'primaryBorderColor': '#4C6EF5',
+    'lineColor': '#64748B',
+    'fontSize': '14px',
+    'fontFamily': 'Inter, Helvetica, Arial, sans-serif'
+  },
+  'flowchart': {
+    'padding': 32,
+    'nodeSpacing': 60,
+    'rankSpacing': 70,
+    'curve': 'basis'
+  }
+}}%%
+
+flowchart TB
+    %% ── Core thesis at top ──
+    Thesis["The Elite Generalist Framework<br/><b>Decade-proof, agentic-ready, high-assurance software</b>"]
+
+    %% ── Six Pillars ──
+    P1["<b>1. Zero-Dependency Sovereignty</b><br/>stdlib-only · technical control<br/>decade-proof · minimized attack surface"]
+    P2["<b>2. Parser Combinator Engine</b><br/>newtype Parser a = String → Maybe (String,a)<br/>charP · stringP · spanP · notEmpty"]
+    P3["<b>3. Four Mathematical Abstractions</b><br/>Functor · Applicative · Alternative · Monoid<br/>sequenceA · &lt;|&gt; · Min indexing"]
+    P4["<b>4. Literate Engineering Workflow</b><br/>Tangling · Weaving · NoBuild<br/>code = documentation = ground truth"]
+    P5["<b>5. Computational Arbitrage</b><br/>RLE · Double RLE (Mathematical Jumping)<br/>Bottom-up state simulation · O(1) / O(log N)"]
+    P6["<b>6. Elite Implementation Toolkit</b><br/>open → fstat → mmap · Corecursion<br/>Zero Initialization · Wait-for-Input"]
+
+    %% ── Pillar dependencies ──
+    Thesis --> P1
+    P1 -->|"enables"| P2
+    P2 -->|"composed via"| P3
+    P3 -->|"enables"| P5
+    P4 -.->|"governs"| P2
+    P4 -.->|"governs"| P5
+    P6 -->|"supports"| P1
+    P6 -->|"supports"| P2
+    P6 -.->|"supports"| P5
+
+    %% ── Cross-cutting outcomes ──
+    Agentic["<b>Agentic Execution Target</b><br/>self-contained · autonomously verifiable<br/>ready for AI-driven reasoning"]
+    P1 --> Agentic
+    P4 --> Agentic
+    P5 --> Agentic
+    P6 --> Agentic
+
+    %% ── Styling ──
+    classDef thesis fill:#1F2937,color:#F8FAFC,stroke:#0F172A,stroke-width:2px,font-weight:bold;
+    classDef pillar fill:#EFF6FF,color:#1F2937,stroke:#4C6EF5,stroke-width:2px;
+    classDef agentic fill:#F0FDF4,color:#1F2937,stroke:#10B981,stroke-width:2px,stroke-dasharray:5 3;
+
+    class Thesis thesis;
+    class P1,P2,P3,P4,P5,P6 pillar;
+    class Agentic agentic;
