@@ -25,8 +25,24 @@ object CsvParser:
 
   // ── Field-level parsers ────────────────────────────────────────────────
 
-  // Parse a single double-precision number (signed, decimal point optional).
-  // Examples: 1000.0, -1.5, 42, +3.14e-2 (exponent support is a stretch goal)
+  // Parse a single double-precision number (signed, decimal point optional,
+  // scientific notation supported).
+  // Examples: 1000.0, -1.5, 42, +3.14e-2, 1.23E+05, -6.7e-10
+  //
+  // Exponent support was a "stretch goal" in the original Phase 2 spec but
+  // Phase 6's TrajectoryWriter uses %.15g format (which produces scientific
+  // notation for very large/small magnitudes) so the parser MUST handle it
+  // for round-trip correctness. The grammar is:
+  //
+  //   number  := [sign] whole [. frac] [exp]
+  //   sign    := '+' | '-'
+  //   whole   := digit+
+  //   frac    := digit+
+  //   exp     := ('e' | 'E') [sign] digit+
+  //
+  // We build the full numeric string with parser combinators, then hand off
+  // to String.toDouble for the actual numeric parse (it handles all edge
+  // cases of IEEE-754 parsing — overflow, underflow, denormals — for free).
   def doubleP: Parser[Double] =
     val sign    = (charP('-') <|> charP('+')).map {
       case '-' => -1.0
@@ -34,14 +50,27 @@ object CsvParser:
     }
     val digits  = spanP(_.isDigit)
     val frac    = charP('.') *> spanP(_.isDigit)
-    val number  =
-      // Build a string of [sign]digits[.frac] then parse to Double.
-      // We use map2 to combine sign and the integer/frac parts.
+
+    // Optional exponent: 'e' or 'E', optional sign, then mandatory digits
+    val expSign: Parser[String] =
+      (charP('-') <|> charP('+')).map(_.toString) <|> Parser.pure("")
+    val expDigits: Parser[String] = notEmpty(digits)  // exponent must have digits
+    val expPart: Parser[String] =
+      ((charP('e') <|> charP('E')) *> expSign.map2(expDigits)(_ + _))
+        .map(s => "e" + s)
+
+    val number: Parser[Double] =
       val whole: Parser[String] = notEmpty(digits)
       // optional fractional part: ".123" or empty
-      val fracOpt: Parser[String] = frac <|> Parser.pure("")
-      whole.map2(fracOpt)((w, f) => w + (if f.nonEmpty then "." + f else ""))
+      val fracOpt: Parser[String] = frac.map("." + _) <|> Parser.pure("")
+      // optional exponent: "e-05" or empty
+      val expOpt: Parser[String] = expPart <|> Parser.pure("")
+      // Combine into a single string and parse to Double
+      whole
+        .map2(fracOpt)(_ + _)
+        .map2(expOpt)(_ + _)
         .map(s => s.toDouble)  // may throw on malformed input — caller handles
+
     // Apply optional sign
     (sign.map2(number)(_ * _) <|> number)
 

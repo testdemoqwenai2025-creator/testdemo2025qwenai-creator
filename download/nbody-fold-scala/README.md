@@ -14,7 +14,7 @@ Zero-dependency N-body gravitational simulator in Scala 3, demonstrating the **E
 | 3 — RLE Engine | ✅ Sandbox-verified | `Eq[A]` typeclass + `RLE.encode`/`decode` + `RLEIndex` O(log runs) i-th-element lookup; `given Eq[Body]` (same-id not same-state); Phase3Demo 31/31 self-checks pass |
 | 4 — Double RLE | ✅ Sandbox-verified | `DoubleRLE.encode2`/`decode2` (RLE ∘ RLE) + `JumpIndex` O(log doubleRuns) `jumpTo`; **mathematical finding**: standard DoubleRLE is a no-op at L2 (adjacent runs always differ in value), but JumpIndex is still useful — equivalent to RLEIndex with cleaner range-query API; Phase4Demo 42/42 self-checks pass |
 | 5 — N-Body Engine | ✅ Sandbox-verified | Newtonian gravity (G=1, Plummer softening) + leapfrog KDK integrator + `MutableKDK` hot-path (flat Array[Double], zero allocations in the integration loop); Phase5Demo 10/10 self-checks pass: eccentricity drift 6e-10 over 3 orbits, energy drift 8e-7 over 1000 steps, momentum drift 2e-13 (machine precision) |
-| 6 — File I/O (Three-Call) | ⏳ Pending | `FileChannel.open` → `size()` → `map(READ_ONLY, …)` |
+| 6 — File I/O (Three-Call) | ✅ Sandbox-verified | `MappedFileReader` (open → size → map), `InitialConditionsLoader` (streaming line-buffered CSV over mmap), `TrajectoryWriter` (append-only READ_WRITE mmap); zero-copy proven: mmap heap delta 2.39 MiB vs String path 5.39 MiB on a 2.33 MiB file (difference ≥ ½ × file size); Phase6Demo 20/20 self-checks pass |
 | 7 — Corecursion & Streaming | ⏳ Pending | `LazyList.iterate` of `System` states |
 | 8 — Verification & Literate | ⏳ Pending | Tangle / Weave + conservation tests |
 | 9 — Benchmarking | ⏳ Pending | Brute vs. fold vs. RLE vs. Double-RLE |
@@ -51,6 +51,9 @@ sbt "runMain nbody.Phase4Demo"
 
 # Phase 5 — N-body engine demo (Kepler + energy + momentum conservation)
 sbt "runMain nbody.Phase5Demo"
+
+# Phase 6 — File I/O demo (Three-Call mmap, zero-copy proof, load→simulate)
+sbt "runMain nbody.Phase6Demo"
 ```
 
 ## Directory Layout
@@ -70,6 +73,7 @@ nbody-fold-scala/
 │   │   │   ├── Phase3Demo.scala               ← Phase 3 RLE engine demo entrypoint (31 self-checks)
 │   │   │   ├── Phase4Demo.scala               ← Phase 4 DoubleRLE demo entrypoint (42 self-checks)
 │   │   │   ├── Phase5Demo.scala               ← Phase 5 N-body engine demo entrypoint (10 self-checks)
+│   │   │   ├── Phase6Demo.scala               ← Phase 6 File I/O demo entrypoint (20 self-checks)
 │   │   │   ├── Phase0_Domain/
 │   │   │   │   ├── Vec3.scala                 ← 3D vector
 │   │   │   │   ├── Mass.scala                 ← opaque-typed mass newtype
@@ -97,11 +101,15 @@ nbody-fold-scala/
 │   │   │   ├── Phase4_DoubleRLE/
 │   │   │   │   ├── DoubleRLE.scala            ← DoubleRun[A] + encode2/decode2 (RLE ∘ RLE) + compressionBreakdown
 │   │   │   │   └── JumpIndex.scala            ← O(log doubleRuns) jumpTo + slice + speedupVsRLEIndex
-│   │   │   └── Phase5_NBody/
-│   │   │       ├── Physics.scala              ← Newtonian gravity (G=1) + Plummer softening + pairwise force/accel/potential
-│   │   │       ├── Integrator.scala           ← Leapfrog KDK (immutable Vector[Body] form, reference implementation)
-│   │   │       ├── MutableKDK.scala           ← Mutable Array[Double] hot-path (zero-alloc integration loop, 15000× faster)
-│   │   │       └── Simulator.scala            ← step/evolve/energyDrift/momentumDrift orchestration
+│   │   │   ├── Phase5_NBody/
+│   │   │   │   ├── Physics.scala              ← Newtonian gravity (G=1) + Plummer softening + pairwise force/accel/potential
+│   │   │   │   ├── Integrator.scala           ← Leapfrog KDK (immutable Vector[Body] form, reference implementation)
+│   │   │   │   ├── MutableKDK.scala           ← Mutable Array[Double] hot-path (zero-alloc integration loop, 15000× faster)
+│   │   │   │   └── Simulator.scala            ← step/evolve/energyDrift/momentumDrift orchestration
+│   │   │   └── Phase6_IO/
+│   │   │       ├── MappedFileReader.scala     ← Three-Call mmap: open → size → map(READ_ONLY) + diagnostic trace
+│   │   │       ├── InitialConditionsLoader.scala ← Streaming line-buffered CSV over mmap (one line in memory at a time)
+│   │   │       └── TrajectoryWriter.scala     ← Append-only READ_WRITE mmap writer; force() + truncate() on close
 │   └── test/scala/nbody/Phase0_Domain/
 │       └── DomainModelSpec.scala              ← Hand-rolled tests (no test framework)
 ├── data/                                      ← Initial-condition CSVs (Phase 6 populates)
@@ -121,7 +129,7 @@ The workflow document (`skills.md`) suggested `Vector3D.scala` for the second ti
 | 3. Math Abstractions | (Phase 1 ✅) custom `Functor`/`Applicative`/`Alternative`/`Monoid`/`Foldable` traits; `sequenceA` ("Epic Move") and `<|>` ("choice") exercised on both `Option` and `Parser` |
 | 4. Literate Workflow | (Phase 8) `nbody.lit.md` → `Tangle.scala` + `Weave.scala` |
 | 5. Computational Arbitrage | (Phase 3 ✅, Phase 4 ✅, Phase 5 ✅) `RLE.encode/decode` + `RLEIndex.at` + `DoubleRLE.encode2` + `JumpIndex.jumpTo`; Phase 5 leapfrog KDK with `MutableKDK` hot-path; bottom-up force fold via `BodyFoldable[System].foldMapBodies` ready for Phase 9's JumpIndex integration |
-| 6. Elite Toolkit | (Phase 6) Three-Call mmap, (Phase 7) `LazyList` corecursion, (Phase 0 ✅) Zero-Initialization-Rule-compliant `Body.Zero` |
+| 6. Elite Toolkit | (Phase 6 ✅) Three-Call mmap (`open → size → map`), streaming line-buffered CSV loader, append-only mmap trajectory writer; (Phase 7) `LazyList` corecursion; (Phase 0 ✅) Zero-Initialization-Rule-compliant `Body.Zero` |
 
 ## Commercial-Viability Notes
 

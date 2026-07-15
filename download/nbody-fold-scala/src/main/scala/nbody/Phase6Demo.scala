@@ -260,13 +260,13 @@ object Phase6Demo:
     check("no parse errors",
       stats.parseErrors.isEmpty,
       if stats.parseErrors.nonEmpty then stats.parseErrors.head else "")
-    // First body: id=1, mass=1.0, pos=(0.1, 0.01, 0.001)
+    // First body: id=1, mass = 1.0 + (1.0 % 10.0) = 2.0, pos=(0.1, 0.01, 0.001)
     val first = stats.bodies.head
-    val firstMassOk = math.abs(first.mass.value - 1.0) < 1e-12
+    val firstMassOk = math.abs(first.mass.value - 2.0) < 1e-12
     val firstPosOk = math.abs(first.pos.x - 0.1) < 1e-12 &&
                      math.abs(first.pos.y - 0.01) < 1e-12 &&
                      math.abs(first.pos.z - 0.001) < 1e-12
-    check("first body: id=1, mass=1.0, pos=(0.1, 0.01, 0.001)",
+    check("first body: id=1, mass=2.0 (=1.0+(1%10)), pos=(0.1, 0.01, 0.001)",
       first.id == 1L && firstMassOk && firstPosOk,
       s"got $first")
     // Last body: id=nSynthetic
