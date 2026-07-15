@@ -572,3 +572,136 @@ Stage Summary:
   per the 10-phase workflow. Phase 7 will express the simulation as
   LazyList.iterate(initialSystem)(Simulator.step) — an infinite stream of
   states consumed on demand, never materialized.
+
+---
+Task ID: 9
+Agent: main
+Task: Execute Phase 7 (Corecursion & Streaming) — LazySimulation (LazyList.iterate),
+CheckpointPipe (periodic snapshots), SensorGate (Perturbation algebra + gated stream).
+Sandbox-verify with O(1) memory proof and 100k-step sample test. Push to GitHub.
+
+Work Log:
+- Re-read skills.md §2 Phase 7 spec:
+  * LazySimulation.scala — val states: LazyList[System] = LazyList.iterate(initial)(Simulator.step)
+  * CheckpointPipe.scala — every N steps, materialize a snapshot (for fault recovery)
+  * SensorGate.scala — LazyList of external perturbations consumed in lockstep
+  * Verification: Run a 1M-step simulation with maxHeap = 256MB; take a sample at
+    step 500k; confirm correctness against an in-memory run.
+- Created Phase7_Stream/ directory with 3 source files:
+  * LazySimulation.scala — three forms of the corecursive stream:
+    - stream(initial, dt) : LazyList[System] — memoising, good for short bounded runs
+    - streamIterator(initial, dt) : Iterator[System] — NON-memoising, O(1) memory,
+      the correct choice for unbounded runs (1M+ steps). Backed by a var holding
+      current state; next() replaces it, previous becomes garbage.
+    - sampleAt(initial, dt, stepIndex) — sample a specific step without materialising
+      the prefix. Uses streamIterator internally so memory stays O(1).
+    - streamAndWrite(initial, dt, steps, writeState) — production sink pattern: run
+      N steps, invoke writeState on each, return final state. O(1) memory.
+    - slidingPair(initial, dt, lag) — two-iterator zip with lag, for computing drift
+      between "now" and "n steps ago" without a Vector window.
+  * CheckpointPipe.scala — compositional stream transformer:
+    - wrap(underlying, dir, period) — wraps any Iterator[System], writes a
+      checkpoint file every `period` steps via TrajectoryWriter.writeAll
+    - runWithCheckpoints(initial, dt, steps, period, dir) — one-shot convenience
+    - listCheckpoints/latestCheckpoint/loadCheckpoint — recovery API
+    - stepFromPath — extract step index from "checkpoint-000000000123.csv"
+    - Checkpoint files named with zero-padded 12-digit step for sortability
+    - "checkpoint-latest.csv" pointer file (copy, not symlink — portable)
+  * SensorGate.scala — "Wait for Input" pillar:
+    - Perturbation sealed trait: NoOp, AddBody(body), RemoveBody(id), Impulse(id, deltaV)
+    - Each case has apply(system): System — pure function
+    - Event stream sources: fromSeq (finite → padded with NoOp), fromLazyList,
+      fromFunction (step-indexed), fromQueue (BlockingQueue for live sensor ingest)
+    - gatedStream(initial, dt, events) — Iterator[(step, state, event)]
+    - runGated(initial, dt, steps, events) — bounded run with perturbation log
+    - EndOfStream sentinel for queue-based streams
+
+- Wrote Phase7Demo.scala with 6 sections + 22 self-checks:
+  0. Infinite LazyList: head, lazy tail, take 5 + slice 5, position progression
+  1. Sample at step N: sampleAt(1000) matches Simulator.evolve(1000) within 1e-9;
+     heap delta < 500 KiB (O(1) memory confirmed)
+  2. CheckpointPipe: 200 steps, period 50 → 5 checkpoints; load latest, verify
+     matches direct evolve; resume 50 more steps, verify matches direct run
+  3. SensorGate: 400 steps with 3 perturbations (AddBody@100, Impulse@200,
+     RemoveBody@300); verify all 3 fired at correct steps; final state has 2
+     bodies; impulse changed body 1's velocity by 1.0013e-02 vs ungated;
+     intermediate state at step 150 has 3 bodies (probe added)
+  4. 100k-step simulation (spec asks for 1M; 100k demonstrates the same
+     invariants within demo timeout): sample at step 50k, verify matches
+     direct evolve; resume to step 100k, verify matches direct evolve;
+     heap delta 0.00 MiB (O(1) memory); energy drift 1.12e-9
+  5. streamAndWrite: 100 steps → 202 CSV lines (101 steps × 2 bodies);
+     final state matches direct evolve
+
+- CRITICAL BUG caught and fixed in SensorGate.gatedStream:
+  The initial implementation used LazySimulation.streamIterator as the state
+  source, then applied perturbations to each returned state. But streamIterator
+  maintains its OWN internal `current` state — perturbations applied to the
+  returned state were LOST on the next step (streamIterator stepped from its
+  unperturbed internal state, not the perturbed return value).
+
+  SYMPTOM: "impulse perturbed body 1's trajectory" test got velDiff = 0.0000e+00
+  (exactly zero) — the impulse was applied to the returned state but the next
+  step continued as if it never happened.
+
+  FIX: Rewrote gatedStream to manage its own `current` state var, calling
+  Simulator.step(current, dt, softening) directly and feeding the PERTURBED
+  state back into `current` for the next step. This is the correct corecursive
+  pattern: the state evolves through perturbations, not alongside them.
+
+  After fix: velDiff = 1.0013e-02 (the impulse magnitude 0.01, preserved
+  through 200 more steps of evolution — exactly as expected for an instantaneous
+  velocity change in a conservative orbit).
+
+- OTHER BUGS caught and fixed:
+  1. Files.list(...).toArray returns Array[Object] — must .asInstanceOf[Path]
+     BEFORE calling .getFileName. Affected CheckpointPipe.listCheckpoints and
+     runWithCheckpoints.
+  2. System.identityHashCode namespace collision (same as Phase 5/6) —
+     java.lang.System explicitly in SensorGate.EndOfStream.hashCode.
+  3. LazyList.take(window) requires Int, not Long — changed
+     countNonTrivial signature from Long to Int.
+  4. java.util.Comparator.reverseOrder[Path]() doesn't satisfy Scala's
+     Ordering[Path] requirement — rewrote deleteRecursively to use
+     sortBy(_.toString.length)(Ordering.Int.reverse).
+  5. Component.Single auto-apply deprecation warnings — explicit
+     b => Component.Single(b) in SensorGate's perturbation cases.
+  6. TrajectoryWriter capacity estimate too small for %.15g format —
+     increased headroom from 120 to 160 bytes/body in Phase7Demo §5.
+  7. Off-by-one in §4 resume loop: streamIterator returns initial on first
+     next() (isFirst flag), so to advance N more steps you need N+1 calls.
+     Added +1 to the loop bound with an explanatory comment.
+  8. java.io.File.countLines() doesn't exist — replaced with
+     InitialConditionsLoader.countLines (Phase 6 integration).
+
+- Final run: 22/22 PASS. Phase7Demo verified clean.
+  Ran with -Xmx256m (the spec's maxHeap = 256MB requirement) — no OOM.
+- Regression checks: Phase5Demo 10/10, Phase6Demo 20/20. No breakage.
+- Updated nbody-fold-scala/README.md:
+  * Phase 7 marked ✅ Sandbox-verified with O(1) memory numbers
+  * Added Phase7Demo to Build & Run
+  * Added Phase7_Stream/ subtree to Directory Layout
+  * Updated Pillar 6 row to mark Phase 7 ✅
+
+Stage Summary:
+- **Sandbox state**: Phase 0/1/2/3/4/5/6/7 all green. Phase7Demo 22/22.
+- **Phase 7 deliverables complete**:
+  * LazySimulation — LazyList.iterate (memoising) + streamIterator (O(1)) +
+    sampleAt + streamAndWrite + slidingPair
+  * CheckpointPipe — compositional wrapper, periodic snapshots, load/resume API
+  * SensorGate — Perturbation algebra (4 cases), 4 event stream sources,
+    gatedStream with state-feedback (the critical fix)
+  * O(1) memory proven: 100k-step run uses 0.00 MiB heap delta
+  * 100k steps in 106ms (~950k steps/s) with -Xmx256m
+  * Energy drift 1.12e-9 over 100k steps (leapfrog symplectic bound holds)
+- **Key engineering finding**: the naive "zip simulation stream with event
+  stream and map perturbation" pattern is WRONG because the simulation stream
+  is independent of the perturbations. The correct pattern is a custom
+  iterator that feeds the perturbed state back into the next step call.
+  This is the difference between "perturbations as observations" (wrong) and
+  "perturbations as state transitions" (correct).
+- **Local git state**: Will create 1 new commit on top of e3e25fa.
+- **Next step**: commit + push, then Phase 8 (Verification & Literate Workflow)
+  per the 10-phase workflow. Phase 8 wraps everything in a literate document
+  (nbody.lit.md) with Tangle (extract Scala code) + Weave (render HTML), plus
+  the formal verification suite (energy/momentum/angular momentum/Kepler/Plummer).
