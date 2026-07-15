@@ -158,3 +158,78 @@ Stage Summary:
   encode/decode operations. This is the first concrete realization of
   Pillar 5 (Computational Arbitrage) and sets up Phase 5's bottom-up
   force fold that will be benchmarked against brute-force O(N²) at N=10k.
+---
+Task ID: 5
+Agent: main
+Task: Execute Phase 3 (RLE Engine) — Eq typeclass, RLE.encode/decode,
+RLEIndex O(log runs) lookup, given Eq[Body] (same-id). Sandbox-verify
+and push to GitHub.
+
+Work Log:
+- Re-read skills.md §2 Phase 3 spec:
+  * RLE.scala — encode[A: Eq], decode[A]
+  * RLEIndex — O(log N) i-th element lookup via prefix-sum binary search
+  * given Eq[Body] — bodies equal iff same id (not same state)
+  * Property tests: decode ∘ encode = identity, length preserved
+- Created Phase3_RLE/ directory with 4 source files:
+  * Eq.scala — Eq[A] typeclass with given instances for Int/Long/Double/
+    Boolean/String/Vec3. Eq.instance(f) constructor for one-offs.
+  * RLE.scala — Run[A] case class + encode/decode + encodeTuples/
+    decodeTuples + compressionRatio + decodedLength. Tail-recursive scan.
+  * RLEIndex.scala — final class with prefixSum:Vector[Long], O(log runs)
+    `at(i)`, `atOption(i)`, `runAt(i)`, `slice(from, until)`. Smart
+    constructor builds prefixSum in O(runs).
+  * RLEInstances.scala — given Eq[Body] (same id), Eq[Mass] (value),
+    Eq[Option[A]] and Eq[(A,B)] (compositional).
+- Wrote Phase3Demo.scala with 6 demo sections + 31 self-checks:
+  1. Basic encode/decode round-trip
+  2. Property tests (round-trip identity, length preserved, empty,
+     singleton laws) on 5 input vectors
+  3. Eq[Body] — three same-id bodies with DIFFERENT positions collapse
+     into one run of length 3 (proving Eq[Body] is identity-based, not
+     state-based)
+  4. RLEIndex.at — exhaustive check that idx.at(i) == big(i) for ALL
+     1000 positions of a 10-run × 100-each test vector; spot-checks at
+     run boundaries (i=99/100/199/200/...); out-of-bounds returns None
+  5. RLEIndex.slice — extract [95, 205) crossing two run boundaries;
+     verify == big.slice(95, 205); verify head/tail content
+  6. Compression ratio on a 10k-body spatial grid (100 cells × 100
+     bodies each) — achieves 100× compression (10000 → 100 runs)
+- First sandbox run: 29/31 passed, 2 failed. Both were TEST bugs
+  (not engine bugs):
+  1. Expected run count = 3 for Vector(1,1,1,2,2,3,1,1,1,1) but the
+     correct answer is 4 — RLE preserves run identity, NOT set
+     membership. (1,1,1) and (1,1,1,1) are TWO separate runs of 1s
+     because they're separated by 2s and 3s.
+  2. Slice [95, 205) ends at position 204 which is in the 2s range
+     (200..299), not the 1s range. My comment said "ends with five 1s"
+     but the correct expectation is "ends with five 2s".
+  Plus one f-interpolator format bug: `${expr}%.1f×` doesn't work in
+  Scala 3 (same issue Phase 0 hit). Extracted to local vars and used
+  proper f"... $var%.1f×" syntax. Fix matches the pattern from
+  Phase 0's KeplerDemo fix.
+- Second sandbox run: 31/31 PASS. Phase3Demo verified clean.
+- Regression check: re-ran KeplerDemo (4/4), Phase1Demo (4/4),
+  Phase2Demo (5/5). No regressions from Phase 3 additions.
+- Updated nbody-fold-scala/README.md:
+  * Phase 3 marked ✅ Sandbox-verified in Status table
+  * Added Phase3Demo to Build & Run commands
+  * Expanded Directory Layout to show Phase3_RLE/ subtree
+  * Updated Pillar 5 row to mark "Phase 3 ✅ partial"
+- Wrote this worklog entry.
+
+Stage Summary:
+- **Sandbox state**: Phase 0/1/2/3 all green. Phase3Demo 31/31 self-
+  checks pass. No regressions in earlier phases.
+- **Phase 3 deliverables complete**:
+  * Eq[A] typeclass with 7 primitive/structural given instances
+  * RLE.encode/decode — O(n) single-pass tail-recursive
+  * RLEIndex — O(log runs) prefix-sum binary search; supports at,
+    atOption, runAt, slice
+  * given Eq[Body] — identity-based equality (same id, different state)
+  * All 4 property laws verified: round-trip identity, length
+    preservation, empty/singleton edge cases
+- **Local git state**: Will create 1 new commit on top of 432e601.
+- **Next step**: commit + push, then Phase 4 (Double RLE) per the
+  10-phase workflow. Phase 4 will stack a second RLE pass on top of
+  the first to achieve O(log log N) jumps via two-level binary search.
