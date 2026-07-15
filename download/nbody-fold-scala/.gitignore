@@ -1,0 +1,24 @@
+# sbt / Scala build artifacts
+target/
+project/target/
+project/project/
+*.class
+*.jar
+*.log
+
+# IDE
+.idea/
+.vscode/
+.bsp/
+.bloop/
+.metals/
+.coursier/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Simulation outputs (kept under results/, but raw dumps go here)
+*.bin
+*.h5
+results/*.tmp
