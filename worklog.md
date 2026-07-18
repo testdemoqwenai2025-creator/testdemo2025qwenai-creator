@@ -2101,3 +2101,71 @@ Stage Summary:
        heliocentric orbit is wiggly (radius ~0.0026 AU around Earth),
        but the visual payoff of seeing the Moon actually orbit Earth
        while Earth orbits the Sun is high.
+
+---
+Task ID: phase-20-push-confirm
+Agent: main (continuation)
+Task: User issued fresh PAT `ghp_3ufEvQz...` after the prior session's
+push was blocked. Push Phase 20 commits to origin/main and verify the
+public GitHub Pages endpoint serves Phase 20 live.
+
+Work Log:
+- Pre-push token scope check via `curl -I -H 'Authorization: token ...'
+  https://api.github.com/user` → `x-oauth-scopes: repo, workflow`.
+  Token has the required `repo` scope for pushing to a private-repo
+  capable classic workflow. (Note: this token is now in chat history
+  and must be treated as exposed; user should revoke at
+  https://github.com/settings/tokens after the push lands.)
+- Executed one-shot push (token NOT persisted in .git/config):
+    git push https://x-access-token:ghp_...@github.com/testdemoqwenai2025-creator/testdemo2025qwenai-creator.git main:main
+  Result: `7d0c9a3..02e3c52  main -> main` — push succeeded.
+- Post-push verification via GitHub API:
+    GET /repos/.../commits/main → sha 02e3c52a1bdf15c4f984de93dbf2a0a9bb51539f
+    (matches local HEAD exactly)
+- GitHub Pages build started automatically (status: "building").
+  Polled `GET /repos/.../pages/builds/latest` every 15s — built within
+  ~30s. Final status: "built".
+- Verified public endpoint reachable:
+    curl https://testdemoqwenai2025-creator.github.io/testdemo2025qwenai-creator/
+    → HTTP 200, 15256 bytes, 0.36s
+- All 5 Phase 20 assets reachable on the public endpoint:
+    spacedata.js  → HTTP 200
+    app.js        → HTTP 200
+    physics.js    → HTTP 200
+    index.html    → HTTP 200
+    styles.css    → HTTP 200
+- Rendered the public URL in `agent-browser` (headless Chromium):
+    - Page title: 'nbody-fold — live demo'
+    - Phase 20 panel present (`#space-data-panel` = true)
+    - Section title rendered: 'Live space data Phase 20 · NASA APOD ·
+      JPL planet ephemeris · live ISS tracker'
+    - APOD image: today's NASA APOD 'Shadow and Rainbow' (2026-07-18)
+      loaded directly from apod.nasa.gov, naturalWidth=1024, complete=true
+    - Planet legend: 8 dots rendered
+    - All 8 planet names visible in body text
+    - '▶ Load live planets & simulate' button present
+    - '🪐 Live Solar System (today)' scenario button present
+    - `window.NBodySpaceData.computePlanets(new Date())` returns 9 bodies
+      (Sun + 8 planets) — verified directly on the public page
+- Captured final screenshot:
+    /home/z/my-project/download/phase20-public-live.png (401 KB)
+
+Stage Summary:
+- **Push state**: COMPLETE. origin/main = 02e3c52, matches local HEAD.
+- **Public endpoint**: LIVE at
+    https://testdemoqwenai2025-creator.github.io/testdemo2025qwenai-creator/
+  Phase 20 verified end-to-end on the public URL in a real browser:
+  APOD loads today's NASA image, planet ephemeris computes 9 live bodies,
+  ISS canvas renders, all buttons + scenario library entry present.
+- **Shareable deep-links** (now publicly reachable):
+    Main demo:           https://testdemoqwenai2025-creator.github.io/testdemo2025qwenai-creator/
+    Auto-narrated tour:  https://testdemoqwenai2025-creator.github.io/testdemo2025qwenai-creator/?tour=1
+    Live Solar System:   https://testdemoqwenai2025-creator.github.io/testdemo2025qwenai-creator/#s=solarSystemLive
+- **Security reminder**: The PAT `ghp_3ufEvQz...` is now in chat history
+  and should be revoked at https://github.com/settings/tokens after the
+  user confirms everything looks good. A new token will be needed for
+  Phase 21+ pushes.
+- **Phase 20 deliverable**: SHIPPED. Three live-data subsystems (NASA
+  APOD, JPL planet ephemeris, ISS tracker), all zero-dependency vanilla
+  JS, all with graceful offline fallbacks, all reachable on the public
+  GitHub Pages endpoint.
