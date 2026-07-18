@@ -1,196 +1,235 @@
-/* ============================================================================
- * db.js — IndexedDB-backed persistence for the static demo
- * ============================================================================
- * Mirrors the Prisma schema in /prisma/schema.prisma (4 object stores):
- *
- *   Simulation  — config + progress + energy0 + drift
- *   Body        — initial conditions per simulation (cascade delete)
- *   Snapshot    — sampled trajectory points (cascade delete)
- *   ApiAudit    — middleware-emitted audit log rows
- *
- * The DB is the "database tier" of the full-stack demo. All /api/* routes
- * read/write through this layer — exactly as the Scala/Prisma backend does.
- * ========================================================================== */
+// ============================================================================
+// db.js — IndexedDB wrapper (4 object stores mirroring Prisma schema)
+// ============================================================================
+// Phase 12 deliverable (static GitHub Pages demo).
+//
+// Used only in STATIC MODE (no ?backend= query param). In dynamic mode the
+// fetch shim bypasses IndexedDB entirely and forwards to the real backend.
+//
+// Schema mirrors Scala Phase12_WebTier/Database.scala:
+//   systems        (id, name, createdAt, dt, softening, steps)
+//   bodies         (id, systemId, mass, x, y, z, vx, vy, vz)
+//   trajectories   (id, systemId, step, x, y, z, vx, vy, vz, energy)
+//   audit          (id, ts, method, path, status, ms, meta)
+//
+// Cascade delete: deleting a system also deletes all its bodies,
+// trajectories, and audit-log rows.
+// ============================================================================
 
-const DB_NAME = 'nbody-fold-scala';
-const DB_VERSION = 1;
-const STORES = ['Simulation', 'Body', 'Snapshot', 'ApiAudit'];
+(function (global) {
+  'use strict';
 
-let _db = null;
-let _nextId = { Simulation: 1, Body: 1, Snapshot: 1, ApiAudit: 1 };
+  const DB_NAME = 'nbody-fold';
+  const DB_VERSION = 2;  // Phase 15: bumped to add bodyId field to trajectories
+  const STORES = ['systems', 'bodies', 'trajectories', 'audit'];
 
-/** Open (or create) the IndexedDB database. Returns a Promise<IDBDatabase>. */
-function openDB() {
-  if (_db) return Promise.resolve(_db);
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = (ev) => {
-      const db = ev.target.result;
-      if (!db.objectStoreNames.contains('Simulation')) {
-        const s = db.createObjectStore('Simulation', { keyPath: 'id', autoIncrement: true });
-        s.createIndex('name', 'name', { unique: false });
-        s.createIndex('createdAt', 'createdAt', { unique: false });
-      }
-      if (!db.objectStoreNames.contains('Body')) {
-        const s = db.createObjectStore('Body', { keyPath: 'id', autoIncrement: true });
-        s.createIndex('simulationId', 'simulationId', { unique: false });
-      }
-      if (!db.objectStoreNames.contains('Snapshot')) {
-        const s = db.createObjectStore('Snapshot', { keyPath: 'id', autoIncrement: true });
-        s.createIndex('simulationId', 'simulationId', { unique: false });
-        s.createIndex('simulationId_step', ['simulationId', 'step'], { unique: false });
-      }
-      if (!db.objectStoreNames.contains('ApiAudit')) {
-        const s = db.createObjectStore('ApiAudit', { keyPath: 'id', autoIncrement: true });
-        s.createIndex('ts', 'ts', { unique: false });
-        s.createIndex('path', 'path', { unique: false });
-      }
-    };
-    req.onsuccess = async (ev) => {
-      _db = ev.target.result;
-      // Initialize _nextId counters from existing rows
-      for (const store of STORES) {
-        const maxId = await getMaxId(store);
-        _nextId[store] = maxId + 1;
-      }
-      resolve(_db);
-    };
-    req.onerror = (ev) => reject(ev.target.error);
-  });
-}
+  let _db = null;
+  let _nextId = { systems: 1, bodies: 1, trajectories: 1, audit: 1 };
 
-/** Get the maximum id in a store (or 0 if empty). */
-function getMaxId(store) {
-  return new Promise((resolve, reject) => {
-    if (!_db) return resolve(0);
-    const tx = _db.transaction(store, 'readonly');
-    const idx = tx.objectStore(store);
-    const openReq = idx.openCursor(null, 'prev');
-    openReq.onsuccess = (ev) => {
-      const cursor = ev.target.result;
-      if (cursor) resolve(cursor.value.id || 0);
-      else resolve(0);
-    };
-    openReq.onerror = (ev) => reject(ev.target.error);
-  });
-}
-
-/** Allocate the next id for a store (monotonic, collision-free). */
-function nextId(store) {
-  const id = _nextId[store];
-  _nextId[store] = id + 1;
-  return id;
-}
-
-/** Insert a row into a store. Resolves to the inserted row (with id). */
-function dbInsert(store, row) {
-  return openDB().then(db => new Promise((resolve, reject) => {
-    const tx = db.transaction(store, 'readwrite');
-    const id = nextId(store);
-    const rowWithId = { ...row, id };
-    tx.objectStore(store).add(rowWithId);
-    tx.oncomplete = () => resolve(rowWithId);
-    tx.onerror = () => reject(tx.error);
-  }));
-}
-
-/** Get a single row by id. Resolves to row or null. */
-function dbGet(store, id) {
-  return openDB().then(db => new Promise((resolve, reject) => {
-    const tx = db.transaction(store, 'readonly');
-    const req = tx.objectStore(store).get(id);
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
-  }));
-}
-
-/** Get all rows from a store, optionally sorted by a key. */
-function dbAll(store, sortKey = null) {
-  return openDB().then(db => new Promise((resolve, reject) => {
-    const tx = db.transaction(store, 'readonly');
-    const req = tx.objectStore(store).getAll();
-    req.onsuccess = () => {
-      const rows = req.result || [];
-      if (sortKey) rows.sort((a, b) => (a[sortKey] || 0) - (b[sortKey] || 0));
-      resolve(rows);
-    };
-    req.onerror = () => reject(req.error);
-  }));
-}
-
-/** Get all rows from a store where indexField === value. */
-function dbWhere(store, indexField, value) {
-  return openDB().then(db => new Promise((resolve, reject) => {
-    const tx = db.transaction(store, 'readonly');
-    const idx = tx.objectStore(store).index(indexField);
-    const req = idx.getAll(value);
-    req.onsuccess = () => resolve(req.result || []);
-    req.onerror = () => reject(req.error);
-  }));
-}
-
-/** Upsert a row with a specific id (preserves the id). */
-function dbPut(store, row) {
-  return openDB().then(db => new Promise((resolve, reject) => {
-    const tx = db.transaction(store, 'readwrite');
-    tx.objectStore(store).put(row);
-    tx.oncomplete = () => resolve(row);
-    tx.onerror = () => reject(tx.error);
-  }));
-}
-
-/** Delete a row by id. */
-function dbDelete(store, id) {
-  return openDB().then(db => new Promise((resolve, reject) => {
-    const tx = db.transaction(store, 'readwrite');
-    tx.objectStore(store).delete(id);
-    tx.oncomplete = () => resolve(true);
-    tx.onerror = () => reject(tx.error);
-  }));
-}
-
-/** Delete all rows where indexField === value (cascade delete helper). */
-function dbDeleteWhere(store, indexField, value) {
-  return openDB().then(db => new Promise((resolve, reject) => {
-    const tx = db.transaction(store, 'readwrite');
-    const idx = tx.objectStore(store).index(indexField);
-    const req = idx.openCursor(value);
-    let count = 0;
-    req.onsuccess = (ev) => {
-      const cursor = ev.target.result;
-      if (cursor) { cursor.delete(); count++; cursor.continue(); }
-    };
-    tx.oncomplete = () => resolve(count);
-    tx.onerror = () => reject(tx.error);
-  }));
-}
-
-/** Count rows in a store. */
-function dbCount(store) {
-  return openDB().then(db => new Promise((resolve, reject) => {
-    const tx = db.transaction(store, 'readonly');
-    const req = tx.objectStore(store).count();
-    req.onsuccess = () => resolve(req.result || 0);
-    req.onerror = () => reject(req.error);
-  }));
-}
-
-/** Clear all stores (used by the "reset" button if added later). */
-async function dbClearAll() {
-  const db = await openDB();
-  for (const store of STORES) {
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(store, 'readwrite');
-      tx.objectStore(store).clear();
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
+  function open() {
+    return new Promise((resolve, reject) => {
+      if (_db) return resolve(_db);
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('systems')) {
+          const s = db.createObjectStore('systems', { keyPath: 'id' });
+          s.createIndex('createdAt', 'createdAt');
+        }
+        if (!db.objectStoreNames.contains('bodies')) {
+          const b = db.createObjectStore('bodies', { keyPath: 'id' });
+          b.createIndex('systemId', 'systemId');
+        }
+        if (!db.objectStoreNames.contains('trajectories')) {
+          const t = db.createObjectStore('trajectories', { keyPath: 'id' });
+          t.createIndex('systemId', 'systemId');
+          t.createIndex('systemId_step', ['systemId', 'step']);
+        }
+        if (!db.objectStoreNames.contains('audit')) {
+          db.createObjectStore('audit', { keyPath: 'id' });
+        }
+      };
+      req.onsuccess = (e) => {
+        _db = e.target.result;
+        // Compute next-id for each store
+        let pending = STORES.length;
+        STORES.forEach(store => {
+          const tx = _db.transaction(store, 'readonly');
+          const idx = tx.objectStore(store);
+          const openReq = idx.openCursor(null, 'prev');
+          openReq.onsuccess = (ev) => {
+            const cursor = ev.target.result;
+            if (cursor) _nextId[store] = cursor.value.id + 1;
+            if (--pending === 0) resolve(_db);
+          };
+          openReq.onerror = () => {
+            if (--pending === 0) resolve(_db);
+          };
+        });
+      };
+      req.onerror = () => reject(req.error);
     });
   }
-  _nextId = { Simulation: 1, Body: 1, Snapshot: 1, ApiAudit: 1 };
-  return true;
-}
 
-// Expose to global scope
-window.NBodyDB = {
-  openDB, dbInsert, dbPut, dbGet, dbAll, dbWhere, dbDelete, dbDeleteWhere, dbCount, dbClearAll,
-};
+  function tx(store, mode) {
+    return _db.transaction(store, mode).objectStore(store);
+  }
+
+  function reqAsPromise(req) {
+    return new Promise((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async function put(store, value) {
+    value.id = value.id || _nextId[store]++;
+    await reqAsPromise(tx(store, 'readwrite').put(value));
+    return value.id;
+  }
+
+  async function get(store, id) {
+    return reqAsPromise(tx(store, 'readonly').get(id));
+  }
+
+  async function getAll(store) {
+    return reqAsPromise(tx(store, 'readonly').getAll());
+  }
+
+  async function getAllByIndex(store, indexName, value) {
+    const idx = tx(store, 'readonly').index(indexName);
+    return reqAsPromise(idx.getAll(value));
+  }
+
+  async function del(store, id) {
+    await reqAsPromise(tx(store, 'readwrite').delete(id));
+  }
+
+  function clearAll() {
+    return Promise.all(STORES.map(s => reqAsPromise(tx(s, 'readwrite').clear())));
+  }
+
+  // ── Domain-specific helpers ──────────────────────────────────────────────
+
+  async function listSystems() {
+    const all = await getAll('systems');
+    all.sort((a, b) => a.createdAt - b.createdAt);
+    return all;
+  }
+
+  async function getSystem(id) { return get('systems', id); }
+
+  async function insertSystem(name, dt, softening) {
+    const id = _nextId.systems++;
+    const row = {
+      id, name: name || 'unnamed',
+      createdAt: Date.now(),
+      dt: +dt, softening: +softening,
+      steps: 0
+    };
+    await reqAsPromise(tx('systems', 'readwrite').put(row));
+    return row;
+  }
+
+  async function bodiesOf(systemId) {
+    return getAllByIndex('bodies', 'systemId', systemId);
+  }
+
+  async function insertBody(systemId, body) {
+    const id = _nextId.bodies++;
+    const row = {
+      id, systemId,
+      mass: +body.mass,
+      x: +body.x, y: +body.y, z: +body.z,
+      vx: +body.vx, vy: +body.vy, vz: +body.vz
+    };
+    await reqAsPromise(tx('bodies', 'readwrite').put(row));
+    return row;
+  }
+
+  async function trajectoriesOf(systemId) {
+    const rows = await getAllByIndex('trajectories', 'systemId', systemId);
+    rows.sort((a, b) => a.step - b.step);
+    return rows;
+  }
+
+  async function lastTrajectoryOf(systemId) {
+    const rows = await trajectoriesOf(systemId);
+    return rows.length ? rows[rows.length - 1] : null;
+  }
+
+  async function insertTrajectory(systemId, step, bodyId, x, y, z, vx, vy, vz, energy) {
+    // Phase 15: signature now includes bodyId.
+    // Backwards-compatible with legacy (sysId, step, x, y, z, vx, vy, vz, energy)
+    // by detecting whether the 3rd arg is a number-shaped bodyId.
+    if (typeof bodyId === 'number') {
+      // new shape
+    } else {
+      // legacy shape — shift args right
+      energy = vz; vz = vy; vy = vx; vx = z; z = y; y = x; x = bodyId; bodyId = 0;
+    }
+    const id = _nextId.trajectories++;
+    const row = {
+      id, systemId, step: +step, bodyId: +bodyId,
+      x: +x, y: +y, z: +z, vx: +vx, vy: +vy, vz: +vz,
+      energy: +energy
+    };
+    await reqAsPromise(tx('trajectories', 'readwrite').put(row));
+    return row;
+  }
+
+  async function updateSystemSteps(systemId, deltaSteps) {
+    const sys = await get('systems', systemId);
+    if (!sys) return null;
+    sys.steps = (sys.steps || 0) + (+deltaSteps);
+    await reqAsPromise(tx('systems', 'readwrite').put(sys));
+    return sys;
+  }
+
+  async function deleteSystem(systemId) {
+    // Cascade delete bodies + trajectories
+    const bodies = await bodiesOf(systemId);
+    const trajs = await trajectoriesOf(systemId);
+    const t = _db.transaction(['systems', 'bodies', 'trajectories'], 'readwrite');
+    t.objectStore('systems').delete(systemId);
+    for (const b of bodies) t.objectStore('bodies').delete(b.id);
+    for (const tr of trajs) t.objectStore('trajectories').delete(tr.id);
+    await new Promise((res, rej) => { t.oncomplete = res; t.onerror = () => rej(t.error); });
+    return true;
+  }
+
+  async function insertAudit(row) {
+    const id = _nextId.audit++;
+    await reqAsPromise(tx('audit', 'readwrite').put({ id, ts: Date.now(), ...row }));
+    return id;
+  }
+
+  async function listAudit(limit) {
+    const all = await getAll('audit');
+    all.sort((a, b) => b.ts - a.ts);
+    return limit ? all.slice(0, limit) : all;
+  }
+
+  async function stats() {
+    const [systems, bodies, trajectories, audit] = await Promise.all([
+      getAll('systems'), getAll('bodies'), getAll('trajectories'), getAll('audit')
+    ]);
+    return {
+      systems: systems.length,
+      bodies: bodies.length,
+      trajectories: trajectories.length,
+      audit: audit.length
+    };
+  }
+
+  global.NBodyDB = {
+    open,
+    STORES,
+    listSystems, getSystem, insertSystem, deleteSystem, updateSystemSteps,
+    bodiesOf, insertBody,
+    trajectoriesOf, lastTrajectoryOf, insertTrajectory,
+    insertAudit, listAudit,
+    stats, clearAll
+  };
+
+})(typeof window !== 'undefined' ? window : globalThis);

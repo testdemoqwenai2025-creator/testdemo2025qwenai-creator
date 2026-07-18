@@ -1,339 +1,260 @@
-/* ============================================================================
- * routes.js — REST API route handlers for the static demo
- * ============================================================================
- * Mirrors the Next.js API routes in src/app/api/:
- *
- *   GET    /api/health                       — uptime + row counts
- *   GET    /api/simulations                  — list all systems
- *   POST   /api/simulations                  — create a system + bodies
- *   GET    /api/simulations/:id              — get system + bodies
- *   DELETE /api/simulations/:id              — delete (cascade) system
- *   POST   /api/simulations/:id/step         — advance N leapfrog KDK steps
- *   GET    /api/simulations/:id/snapshots    — chart data (energy/momentum)
- *   GET    /api/audit                        — recent audit-log rows
- *
- * Each handler returns a synthetic Response (see middleware.js makeResponse).
- * The dispatcher parses the path + method and dispatches to the handler.
- * ========================================================================== */
+// ============================================================================
+// routes.js — REST route handlers (1:1 port of Scala Phase 12 Routes.scala)
+// ============================================================================
+// Phase 12 deliverable (static GitHub Pages demo).
+//
+// Endpoints (all JSON):
+//   GET    /api/health                       → health snapshot
+//   GET    /api/systems                      → list all systems
+//   POST   /api/systems                      → create a system + bodies
+//   GET    /api/systems/:id                  → full state: meta + bodies + last
+//   POST   /api/systems/:id/step             → advance N steps, persist samples
+//   GET    /api/systems/:id/trajectories     → all trajectory samples
+//   DELETE /api/systems/:id                  → cascade delete
+//   GET    /api/audit                        → recent audit-log rows
+//
+// Each handler takes a Request and returns a Response. Dispatch is a single
+// pattern-match on (method, path-segments) — same shape as Scala.
+// ============================================================================
 
-const { MutableBodySystem, generateInitialConditions } = window.NBodyPhysics;
-const { makeResponse } = window.NBodyMW;
+(function (global) {
+  'use strict';
 
-const START_MS = Date.now();
+  const { json, errorJson } = global.NBodyMiddleware;
+  const P = global.NBodyPhysics;
 
-// ── Route handlers ─────────────────────────────────────────────────────────
+  function makeRoutes(db, opts) {
+    opts = opts || {};
+    const startedAt = opts.startedAt || Date.now();
+    const version   = opts.version   || '1.0.0-static';
+    const region    = opts.region    || 'browser';
+    let requestCount = 0;
 
-/** GET /api/health — uptime + row counts from each IndexedDB store. */
-async function getHealth(req) {
-  const [sysCount, bodyCount, snapCount, auditCount] = await Promise.all([
-    window.NBodyDB.dbCount('Simulation'),
-    window.NBodyDB.dbCount('Body'),
-    window.NBodyDB.dbCount('Snapshot'),
-    window.NBodyDB.dbCount('ApiAudit'),
-  ]);
-  return makeResponse(200, {
-    status: 'ok',
-    uptimeSec: Math.round((Date.now() - START_MS) / 1000),
-    systems: sysCount,
-    bodies: bodyCount,
-    snapshots: snapCount,
-    auditRows: auditCount,
-    middlewareChain: ['errorHandler', 'requestLogger', 'authGate', 'jsonBody', 'corsHandler', 'dispatcher'],
-    phase: 12,
-    engine: 'MutableBodySystem (leapfrog KDK, G=1, Plummer softening)',
-  });
-}
-
-/** GET /api/simulations — list all systems (without bodies for brevity). */
-async function listSimulations(req) {
-  const systems = await window.NBodyDB.dbAll('Simulation', 'id');
-  return makeResponse(200, {
-    count: systems.length,
-    simulations: systems.map(s => ({
-      id: s.id,
-      name: s.name,
-      dt: s.dt,
-      softening: s.softening,
-      stepCount: s.stepCount,
-      energy0: s.energy0,
-      energyFinal: s.energyFinal,
-      drift: s.drift,
-      createdAt: s.createdAt,
-    })),
-  });
-}
-
-/** POST /api/simulations — create a system with bodies. */
-async function createSimulation(req) {
-  const { name, dt, softening, bodies, generator, n, seed } = req.body || {};
-
-  if (!Array.isArray(bodies) || bodies.length < 2) {
-    return makeResponse(400, { error: 'bodies must be an array of length >= 2' });
-  }
-  if (typeof dt !== 'number' || dt <= 0) {
-    return makeResponse(400, { error: 'dt must be a positive number' });
-  }
-  if (typeof softening !== 'number' || softening < 0) {
-    return makeResponse(400, { error: 'softening must be >= 0' });
-  }
-
-  // Normalize body shape: { mass, pos:[x,y,z], vel:[x,y,z] }
-  const normalized = bodies.map((b, i) => ({
-    mass: Number(b.mass),
-    pos: Array.isArray(b.pos) ? b.pos.map(Number) : [Number(b.x)||0, Number(b.y)||0, Number(b.z)||0],
-    vel: Array.isArray(b.vel) ? b.vel.map(Number) : [Number(b.vx)||0, Number(b.vy)||0, Number(b.vz)||0],
-  }));
-
-  // Compute energy0 with a fresh system
-  const sys = new MutableBodySystem(normalized);
-  const energy0 = sys.totalEnergy(softening);
-
-  // Insert Simulation row
-  const sim = await window.NBodyDB.dbInsert('Simulation', {
-    name: name || `system-${Date.now()}`,
-    dt, softening,
-    generator: generator || 'custom',
-    n: normalized.length,
-    seed: seed || 0,
-    energy0,
-    energyFinal: energy0,
-    drift: 0,
-    stepCount: 0,
-    createdAt: Date.now(),
-  });
-
-  // Insert Body rows
-  for (let i = 0; i < normalized.length; i++) {
-    await window.NBodyDB.dbInsert('Body', {
-      simulationId: sim.id,
-      bodyId: i + 1,
-      mass: normalized[i].mass,
-      posX: normalized[i].pos[0],
-      posY: normalized[i].pos[1],
-      posZ: normalized[i].pos[2],
-      velX: normalized[i].vel[0],
-      velY: normalized[i].vel[1],
-      velZ: normalized[i].vel[2],
-    });
-  }
-
-  return makeResponse(201, {
-    id: sim.id,
-    name: sim.name,
-    bodies: normalized.length,
-    energy0,
-    dt, softening,
-    createdAt: sim.createdAt,
-  });
-}
-
-/** GET /api/simulations/:id — get a system + its bodies. */
-async function getSimulation(req, id) {
-  const sim = await window.NBodyDB.dbGet('Simulation', Number(id));
-  if (!sim) return makeResponse(404, { error: `Simulation ${id} not found` });
-  const bodies = await window.NBodyDB.dbWhere('Body', 'simulationId', Number(id));
-  return makeResponse(200, {
-    ...sim,
-    bodies: bodies.map(b => ({
-      bodyId: b.bodyId,
-      mass: b.mass,
-      pos: [b.posX, b.posY, b.posZ],
-      vel: [b.velX, b.velY, b.velZ],
-    })),
-  });
-}
-
-/** DELETE /api/simulations/:id — cascade delete a system + its bodies + snapshots. */
-async function deleteSimulation(req, id) {
-  const sim = await window.NBodyDB.dbGet('Simulation', Number(id));
-  if (!sim) return makeResponse(404, { error: `Simulation ${id} not found` });
-  const bCount = await window.NBodyDB.dbDeleteWhere('Body', 'simulationId', Number(id));
-  const sCount = await window.NBodyDB.dbDeleteWhere('Snapshot', 'simulationId', Number(id));
-  await window.NBodyDB.dbDelete('Simulation', Number(id));
-  return makeResponse(200, {
-    deleted: true,
-    id: Number(id),
-    bodiesRemoved: bCount,
-    snapshotsRemoved: sCount,
-  });
-}
-
-/** POST /api/simulations/:id/step — advance N leapfrog KDK steps. */
-async function stepSimulation(req, id) {
-  const { steps, sampleEvery } = req.body || {};
-  const sim = await window.NBodyDB.dbGet('Simulation', Number(id));
-  if (!sim) return makeResponse(404, { error: `Simulation ${id} not found` });
-
-  const N = Math.max(1, Math.min(50000, Number(steps) || 100));
-  const sample = Math.max(1, Number(sampleEvery) || 10);
-
-  // Rebuild the system from the stored bodies
-  const bodyRows = await window.NBodyDB.dbWhere('Body', 'simulationId', Number(id));
-  if (bodyRows.length === 0) {
-    return makeResponse(400, { error: `Simulation ${id} has no bodies` });
-  }
-  bodyRows.sort((a, b) => a.bodyId - b.bodyId);
-  const inits = bodyRows.map(b => ({
-    mass: b.mass,
-    pos: [b.posX, b.posY, b.posZ],
-    vel: [b.velX, b.velY, b.velZ],
-  }));
-
-  // Load existing snapshots so we can continue from the right step
-  const existingSnaps = await window.NBodyDB.dbWhere('Snapshot', 'simulationId', Number(id));
-  const startStep = existingSnaps.reduce((max, s) => Math.max(max, s.step), 0);
-
-  const sys = new MutableBodySystem(inits);
-  // If we have a prior snapshot, restore positions/velocities from the latest one
-  if (existingSnaps.length > 0) {
-    existingSnaps.sort((a, b) => a.step - b.step);
-    const last = existingSnaps[existingSnaps.length - 1];
-    for (let i = 0; i < sys.n && i < last.positions.length; i++) {
-      sys.posX[i] = last.positions[i][0];
-      sys.posY[i] = last.positions[i][1];
-      sys.posZ[i] = last.positions[i][2];
-      // Velocities aren't stored in snapshots — recompute from accelerations
-      // For the static demo, we accept that long-running sim accuracy degrades
-      // slightly when resuming. (The Scala backend stores full state in Body rows.)
-    }
-  }
-
-  // Run N steps, sampling every `sample` steps
-  const energyBefore = sys.totalEnergy(sim.softening);
-  for (let i = 1; i <= N; i++) {
-    sys.step(sim.dt, sim.softening);
-    if (i % sample === 0 || i === N) {
-      const snap = sys.snapshot(startStep + i, sim.softening);
-      await window.NBodyDB.dbInsert('Snapshot', {
-        simulationId: Number(id),
-        step: startStep + i,
-        energy: snap.energy,
-        momentumMag: snap.momentumMag,
-        angularMag: snap.angularMag,
-        positions: snap.positions,
-        ts: Date.now(),
+    // ── GET /api/health ─────────────────────────────────────────────────
+    async function health(req) {
+      const uptimeSec = Math.floor((Date.now() - startedAt) / 1000);
+      const stats = await db.stats().catch(() => ({ systems: 0, bodies: 0, trajectories: 0, audit: 0 }));
+      return json(200, {
+        status: 'ok',
+        version,
+        region,
+        uptimeSec,
+        requestCount: ++requestCount,
+        timestamp: Date.now(),
+        systems: stats.systems,
+        bodies: stats.bodies,
+        trajectories: stats.trajectories
       });
     }
-  }
-  const energyAfter = sys.totalEnergy(sim.softening);
-  const drift = energyBefore !== 0 ? (energyAfter - energyBefore) / Math.abs(energyBefore) : 0;
 
-  // Update Simulation row in-place (preserves the id)
-  await window.NBodyDB.dbPut('Simulation', {
-    ...sim,
-    stepCount: startStep + N,
-    energyFinal: energyAfter,
-    drift,
-  });
-
-  return makeResponse(200, {
-    id: Number(id),
-    step: startStep + N,
-    stepsExecuted: N,
-    sampleEvery: sample,
-    energyBefore,
-    energyAfter,
-    drift,
-    snapshotsAdded: Math.floor(N / sample) + (N % sample === 0 ? 0 : 1),
-  });
-}
-
-/** GET /api/simulations/:id/snapshots — chart data (energy/momentum/positions). */
-async function getSnapshots(req, id) {
-  const snaps = await window.NBodyDB.dbWhere('Snapshot', 'simulationId', Number(id));
-  snaps.sort((a, b) => a.step - b.step);
-  return makeResponse(200, {
-    id: Number(id),
-    count: snaps.length,
-    snapshots: snaps.map(s => ({
-      step: s.step,
-      energy: s.energy,
-      momentumMag: s.momentumMag,
-      angularMag: s.angularMag,
-      positions: s.positions,
-    })),
-  });
-}
-
-/** GET /api/audit — recent audit-log rows. */
-async function getAudit(req) {
-  const rows = await window.NBodyDB.dbAll('ApiAudit', 'id');
-  // Return in reverse order (most recent first)
-  rows.reverse();
-  return makeResponse(200, {
-    count: rows.length,
-    audit: rows.slice(0, 100).map(r => ({
-      ts: r.ts,
-      method: r.method,
-      path: r.path,
-      status: r.status,
-      latencyMs: r.latencyMs,
-      ipHash: r.ipHash,
-      apiKey: r.apiKey,
-    })),
-  });
-}
-
-// ── Dispatcher ─────────────────────────────────────────────────────────────
-
-/** Match a path against a route pattern. Returns { matched, params }. */
-function matchPath(pattern, pathname) {
-  const pParts = pattern.split('/').filter(Boolean);
-  const aParts = pathname.split('/').filter(Boolean);
-  if (pParts.length !== aParts.length) return { matched: false, params: {} };
-  const params = {};
-  for (let i = 0; i < pParts.length; i++) {
-    if (pParts[i].startsWith(':')) {
-      params[pParts[i].slice(1)] = decodeURIComponent(aParts[i]);
-    } else if (pParts[i] !== aParts[i]) {
-      return { matched: false, params: {} };
+    // ── GET /api/systems ────────────────────────────────────────────────
+    async function listSystems(req) {
+      const systems = await db.listSystems();
+      const out = [];
+      for (const s of systems) {
+        const bodies = await db.bodiesOf(s.id);
+        const trajs = await db.trajectoriesOf(s.id);
+        out.push({
+          id: s.id, name: s.name, createdAt: s.createdAt,
+          dt: s.dt, softening: s.softening, steps: s.steps,
+          bodies: bodies.length, trajectories: trajs.length
+        });
+      }
+      return json(200, { systems: out });
     }
+
+    // ── POST /api/systems ───────────────────────────────────────────────
+    // Body: { name, dt, softening, bodies: [{mass, x,y,z, vx,vy,vz}, ...] }
+    async function createSystem(req) {
+      const jb = req.jsonBody;
+      if (!jb) return errorJson(400, 'missing_json_body');
+      const name      = jb.name      || 'unnamed';
+      const dt        = +jb.dt       || 0.01;
+      const softening = +jb.softening || P.DefaultSoftening;
+      const bodiesArr = Array.isArray(jb.bodies) ? jb.bodies : [];
+      if (bodiesArr.length === 0) return errorJson(400, 'empty_bodies');
+
+      const sys = await db.insertSystem(name, dt, softening);
+      for (const b of bodiesArr) await db.insertBody(sys.id, b);
+
+      // Phase 15: persist step-0 trajectory for ALL bodies, not just body 0.
+      const bodies = await db.bodiesOf(sys.id);
+      const e0 = P.totalEnergy(bodies, softening);
+      for (let i = 0; i < bodies.length; i++) {
+        const b = bodies[i];
+        await db.insertTrajectory(sys.id, 0, i, b.x, b.y, b.z, b.vx, b.vy, b.vz, e0);
+      }
+
+      return json(201, {
+        id: sys.id, createdAt: sys.createdAt,
+        bodies: bodiesArr.length, energy0: e0
+      });
+    }
+
+    // ── GET /api/systems/:id ────────────────────────────────────────────
+    async function getSystem(req) {
+      const id = pathId(req, 2);
+      if (id === null) return errorJson(400, 'invalid_id');
+      const sys = await db.getSystem(id);
+      if (!sys) return errorJson(404, 'not_found');
+      const bodies = await db.bodiesOf(id);
+      const last = await db.lastTrajectoryOf(id);
+      return json(200, {
+        id: sys.id, name: sys.name, createdAt: sys.createdAt,
+        dt: sys.dt, softening: sys.softening, steps: sys.steps,
+        bodies: bodies.map(b => ({
+          id: b.id, mass: b.mass,
+          x: b.x, y: b.y, z: b.z, vx: b.vx, vy: b.vy, vz: b.vz
+        })),
+        last: last ? {
+          step: last.step, x: last.x, y: last.y, z: last.z, energy: last.energy
+        } : null
+      });
+    }
+
+    // ── POST /api/systems/:id/step ──────────────────────────────────────
+    // Body: { steps, sampleEvery }
+    async function stepSystem(req) {
+      const id = pathId(req, 2);
+      if (id === null) return errorJson(400, 'invalid_id');
+      const sys = await db.getSystem(id);
+      if (!sys) return errorJson(404, 'not_found');
+      const steps = (req.jsonBody && +req.jsonBody.steps) || 100;
+      const sampleEvery = (req.jsonBody && +req.jsonBody.sampleEvery) || 10;
+
+      // Rebuild MutableBodySystem from DB rows
+      const bodyRows = await db.bodiesOf(id);
+      const bodies = bodyRows.map(r => ({
+        mass: r.mass, x: r.x, y: r.y, z: r.z, vx: r.vx, vy: r.vy, vz: r.vz
+      }));
+      const system = new P.MutableBodySystem(bodies, sys.dt, sys.softening);
+
+      const lastTraj = await db.lastTrajectoryOf(id);
+      const e0 = lastTraj ? lastTraj.energy : system.energy();
+
+      // Phase 15: sample ALL bodies (not just body 0). Each sample is stored
+      // with its bodyId so the frontend can render every body's path.
+      let lastEnergy = e0;
+      const init = system.toJSON();
+      for (let i = 0; i < init.length; i++) {
+        const b = init[i];
+        await db.insertTrajectory(id, sys.steps || 0, i,
+          b.x, b.y, b.z, b.vx, b.vy, b.vz, e0);
+      }
+      for (let s = 1; s <= steps; s++) {
+        system.step(sys.dt);
+        if (s % sampleEvery === 0 || s === steps) {
+          lastEnergy = system.energy();
+          const snap = system.toJSON();
+          for (let i = 0; i < snap.length; i++) {
+            const b = snap[i];
+            await db.insertTrajectory(id, (sys.steps || 0) + s, i,
+              b.x, b.y, b.z, b.vx, b.vy, b.vz, lastEnergy);
+          }
+        }
+      }
+      await db.updateSystemSteps(id, steps);
+
+      const drift = (e0 === 0) ? Math.abs(lastEnergy) : Math.abs(lastEnergy - e0) / Math.abs(e0);
+      return json(200, {
+        step: steps,
+        energy0: e0,
+        energyFinal: lastEnergy,
+        drift,
+        sampled: Math.floor(steps / Math.max(1, sampleEvery))
+      });
+    }
+
+    // ── GET /api/systems/:id/trajectories ───────────────────────────────
+    // Phase 15: include bodyId in each sample. Optional ?bodyId=N filter.
+    async function trajectories(req) {
+      const id = pathId(req, 2);
+      if (id === null) return errorJson(400, 'invalid_id');
+      const sys = await db.getSystem(id);
+      if (!sys) return errorJson(404, 'not_found');
+      const rows = await db.trajectoriesOf(id);
+      const filterBody = req.query && req.query.bodyId !== undefined
+        ? parseInt(req.query.bodyId, 10) : null;
+      const filtered = Number.isFinite(filterBody)
+        ? rows.filter(r => (r.bodyId === undefined ? 0 : r.bodyId) === filterBody)
+        : rows;
+      return json(200, {
+        systemId: id,
+        trajectories: filtered.map(t => ({
+          step: t.step, bodyId: t.bodyId === undefined ? 0 : t.bodyId,
+          x: t.x, y: t.y, z: t.z,
+          vx: t.vx, vy: t.vy, vz: t.vz, energy: t.energy
+        }))
+      });
+    }
+
+    // ── GET /api/systems/:id/trajectories/all ───────────────────────────
+    // Phase 15: grouped-by-body shape for multi-body rendering.
+    async function trajectoriesAll(req) {
+      const id = pathId(req, 2);
+      if (id === null) return errorJson(400, 'invalid_id');
+      const sys = await db.getSystem(id);
+      if (!sys) return errorJson(404, 'not_found');
+      const [rows, bodyRows] = await Promise.all([
+        db.trajectoriesOf(id), db.bodiesOf(id)
+      ]);
+      const byBody = [];
+      for (let i = 0; i < bodyRows.length; i++) {
+        const b = bodyRows[i];
+        const samples = rows
+          .filter(t => (t.bodyId === undefined ? 0 : t.bodyId) === i)
+          .map(t => ({
+            step: t.step,
+            x: t.x, y: t.y, z: t.z,
+            vx: t.vx, vy: t.vy, vz: t.vz,
+            energy: t.energy
+          }));
+        byBody.push({ bodyId: i, mass: b.mass, samples });
+      }
+      return json(200, { systemId: id, bodyCount: bodyRows.length, byBody });
+    }
+
+    // ── DELETE /api/systems/:id ─────────────────────────────────────────
+    async function deleteSystem(req) {
+      const id = pathId(req, 2);
+      if (id === null) return errorJson(400, 'invalid_id');
+      const ok = await db.deleteSystem(id);
+      return ok ? json(200, { deleted: id }) : errorJson(404, 'not_found');
+    }
+
+    // ── GET /api/audit ──────────────────────────────────────────────────
+    async function audit(req) {
+      const limit = parseInt(req.query && req.query.limit, 10) || 50;
+      const rows = await db.listAudit(limit);
+      return json(200, { audit: rows });
+    }
+
+    // ── Dispatcher ──────────────────────────────────────────────────────
+    async function dispatch(req) {
+      const segs = (req.path || '').replace(/^\/+/, '').split('/').filter(s => s.length > 0);
+      const m = req.method;
+      if (m === 'GET'    && segs.length === 2 && segs[0] === 'api' && segs[1] === 'health')        return health(req);
+      if (m === 'GET'    && segs.length === 2 && segs[0] === 'api' && segs[1] === 'systems')        return listSystems(req);
+      if (m === 'POST'   && segs.length === 2 && segs[0] === 'api' && segs[1] === 'systems')        return createSystem(req);
+      if (m === 'GET'    && segs.length === 3 && segs[0] === 'api' && segs[1] === 'systems')        return getSystem(req);
+      if (m === 'POST'   && segs.length === 4 && segs[0] === 'api' && segs[1] === 'systems' && segs[3] === 'step')        return stepSystem(req);
+      if (m === 'GET'    && segs.length === 5 && segs[0] === 'api' && segs[1] === 'systems' && segs[3] === 'trajectories' && segs[4] === 'all') return trajectoriesAll(req);
+      if (m === 'GET'    && segs.length === 4 && segs[0] === 'api' && segs[1] === 'systems' && segs[3] === 'trajectories') return trajectories(req);
+      if (m === 'DELETE' && segs.length === 3 && segs[0] === 'api' && segs[1] === 'systems')        return deleteSystem(req);
+      if (m === 'GET'    && segs.length === 2 && segs[0] === 'api' && segs[1] === 'audit')          return audit(req);
+      return errorJson(404, 'no_route');
+    }
+
+    return { dispatch, health, listSystems, createSystem, getSystem, stepSystem, trajectories, trajectoriesAll, deleteSystem, audit };
   }
-  return { matched: true, params };
-}
 
-/** The dispatcher — pattern-matches the path and calls the right handler. */
-async function dispatcher(req) {
-  const { method, pathname } = req;
-
-  // Static route table
-  const routes = [
-    { pattern: '/api/health',                       method: 'GET',    handler: getHealth },
-    { pattern: '/api/simulations',                  method: 'GET',    handler: listSimulations },
-    { pattern: '/api/simulations',                  method: 'POST',   handler: createSimulation },
-    { pattern: '/api/simulations/:id',              method: 'GET',    handler: (req, p) => getSimulation(req, p.id) },
-    { pattern: '/api/simulations/:id',              method: 'DELETE', handler: (req, p) => deleteSimulation(req, p.id) },
-    { pattern: '/api/simulations/:id/step',         method: 'POST',   handler: (req, p) => stepSimulation(req, p.id) },
-    { pattern: '/api/simulations/:id/snapshots',    method: 'GET',    handler: (req, p) => getSnapshots(req, p.id) },
-    { pattern: '/api/audit',                        method: 'GET',    handler: getAudit },
-  ];
-
-  for (const r of routes) {
-    if (r.method !== method) continue;
-    const { matched, params } = matchPath(r.pattern, pathname);
-    if (matched) return await r.handler(req, params);
+  function pathId(req, idx) {
+    const segs = (req.path || '').replace(/^\/+/, '').split('/').filter(s => s.length > 0);
+    if (segs.length <= idx) return null;
+    const n = parseInt(segs[idx], 10);
+    return Number.isFinite(n) ? n : null;
   }
 
-  return makeResponse(404, {
-    error: 'Not Found',
-    method, pathname,
-    availableRoutes: routes.map(r => `${r.method} ${r.pattern}`),
-  });
-}
+  global.NBodyRoutes = { makeRoutes, pathId };
 
-// ── Build the full middleware chain ────────────────────────────────────────
-
-const fullChain = window.NBodyMW.compose(
-  [...window.NBodyMW.chain, dispatcher],
-  async (req) => makeResponse(404, { error: 'No handler matched', pathname: req.pathname })
-);
-
-// Expose to global scope
-window.NBodyRoutes = {
-  dispatcher,
-  fullChain,
-  process(method, path, body, headers) {
-    const req = window.NBodyMW.makeRequest(method, path, body, headers);
-    return fullChain(req);
-  },
-};
+})(typeof window !== 'undefined' ? window : globalThis);
