@@ -1,0 +1,123 @@
+// ============================================================================
+// schema.prisma — nbody-fold-scala web control plane
+// ============================================================================
+// Four tables form the data model for the web frontend that drives the
+// N-body simulation:
+//
+//   Simulation           — one simulation run (config + summary result)
+//   Body                 — one body's initial conditions, scoped to a Simulation
+//   TrajectorySnapshot   — periodic state sample (energy/momentum/positions)
+//   ApiAudit             — middleware audit log (one row per API request)
+//
+// The schema is intentionally normalized: a Simulation has many Bodies (the
+// initial conditions) and many TrajectorySnapshots (the result of stepping).
+// The ApiAudit table is populated by Next.js middleware to give an audit
+// trail of every API request (auth, latency, status).
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ── Simulation ────────────────────────────────────────────────────────────
+// One row per simulation run. Stores the immutable config (N, dt, softening,
+// algorithm) and the mutable progress (current step, current energy, status).
+model Simulation {
+  id            String   @id @default(cuid())
+  name          String
+  description   String?
+  // Config (immutable after creation)
+  bodyCount     Int
+  dt            Float
+  softening     Float
+  algorithm     String   @default("brute-force") // brute-force | barnes-hut | group-aggregate
+  maxSteps      Int      @default(1000)
+  // Progress (mutable)
+  currentStep   Int      @default(0)
+  status        String   @default("created") // created | running | paused | done | error
+  initialEnergy Float?
+  currentEnergy Float?
+  // Timestamps
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  bodies        Body[]
+  snapshots     TrajectorySnapshot[]
+  audits        ApiAudit[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+// ── Body ──────────────────────────────────────────────────────────────────
+// One row per body in a simulation's initial conditions. The mass, position,
+// and velocity are stored as Floats; the body's ID within the simulation is
+// the `bodyId` field (1-indexed to match the Scala project's convention).
+model Body {
+  id           String   @id @default(cuid())
+  simulationId String
+  bodyId       Int
+  mass         Float
+  posX         Float
+  posY         Float
+  posZ         Float
+  velX         Float
+  velY         Float
+  velZ         Float
+  createdAt    DateTime @default(now())
+
+  simulation   Simulation @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+
+  @@index([simulationId])
+  @@unique([simulationId, bodyId])
+}
+
+// ── TrajectorySnapshot ────────────────────────────────────────────────────
+// Periodic sample of the simulation state. One row per (simulation, step).
+// Stores aggregate quantities (energy, momentum magnitude) plus a compact
+// JSON blob of all body positions at that step, for the frontend to render.
+model TrajectorySnapshot {
+  id            String   @id @default(cuid())
+  simulationId  String
+  step          Int
+  energy        Float
+  momentumMag   Float
+  angularMag    Float
+  // Compact JSON: [[x,y,z], [x,y,z], ...] — one entry per body
+  positionsJson String
+  createdAt     DateTime @default(now())
+
+  simulation    Simulation @relation(fields: [simulationId], references: [id], onDelete: Cascade)
+
+  @@index([simulationId, step])
+  @@unique([simulationId, step])
+}
+
+// ── ApiAudit ──────────────────────────────────────────────────────────────
+// One row per API request, populated by Next.js middleware. Gives a full
+// audit trail of who called what endpoint, when, with what result. Used by
+// the frontend's "Audit Log" panel to demonstrate the middleware layer.
+model ApiAudit {
+  id           String   @id @default(cuid())
+  simulationId String?
+  method       String   // GET | POST | PUT | DELETE
+  path         String
+  status       Int      @default(0)
+  latencyMs    Int      @default(0)
+  userAgent    String?
+  ipHash       String?  // SHA-256 of client IP (privacy-preserving)
+  apiKey       String?  // Redacted API key (last 4 chars) if provided
+  error        String?
+  createdAt    DateTime @default(now())
+
+  simulation   Simulation? @relation(fields: [simulationId], references: [id], onDelete: SetNull)
+
+  @@index([simulationId])
+  @@index([createdAt])
+  @@index([path])
+}

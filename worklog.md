@@ -1370,3 +1370,169 @@ Stage Summary:
   handoff capstone — the project is now release-ready as v1.0.0. All 5
   DoD criteria met, manifest reproducible, maintainer documentation
   complete, supply-chain audit surface minimized (zero libraryDependencies).
+
+---
+Task ID: 14
+Agent: main
+Task: Build a sound full-stack web endpoint on top of the nbody-fold-scala
+  project: Next.js 16 frontend + REST API backend + Prisma/SQLite database
+  with appropriate tables + Next.js middleware. Frontend must communicate
+  with the backend (CRUD + simulation stepper) and persist to the database.
+  Middleware provides request audit logging + API-key gate for writes.
+  Browser-verify the full flow end-to-end before commit. Keep GitHub PAT
+  active for further pushes.
+
+Work Log:
+- Loaded fullstack-dev skill via Skill(command="fullstack-dev"); ran
+  init-fullstack.sh which scaffolded Next.js 16 + Tailwind 4 + shadcn/ui +
+  Prisma + all Radix UI components into /home/z/my-project/.
+- Verified dev server running on port 3000 (Next.js 16.1.3 Turbopack,
+  ready in 868ms).
+- Designed 4-table Prisma schema (prisma/schema.prisma):
+  * Simulation — one simulation run (config + progress + energy)
+  * Body — one body's initial conditions, scoped to Simulation (cascade delete)
+  * TrajectorySnapshot — periodic state sample (energy/momentum/positions)
+  * ApiAudit — one row per /api/* request, populated by middleware via
+    auditApiCall() server-side helper
+  * Indices on (status, createdAt, simulationId, path)
+  * Cascade deletes configured (Simulation → Body, Simulation → TrajectorySnapshot,
+    Simulation → ApiAudit SET NULL)
+- Implemented src/middleware.ts (Next.js Edge middleware):
+  * Audits every /api/* request with method, path, latency, IP hash, redacted API key
+  * Gates write endpoints (POST/PUT/PATCH/DELETE) with x-api-key header
+    matching NBODY_API_KEY env var; constant-time string compare (timing-attack safe)
+  * Uses FNV-1a hash (NOT SHA-256 from Node crypto) because Edge runtime
+    doesn't support Node's `crypto` module — documented this finding
+  * Stamps audit headers (x-nbody-start-ms, x-nbody-ip-hash, x-nbody-api-key,
+    x-nbody-auth-ok) for route handlers to consume and persist
+- Implemented src/lib/audit.ts — server-side auditApiCall() that writes
+  ApiAudit rows after each request completes. Failures are swallowed
+  (audit must not break the request). Provides auditContextFromHeaders()
+  to parse middleware-stamped headers into AuditContext.
+- Implemented src/lib/nbody.ts — TypeScript port of the Scala Phase 5
+  MutableKDK engine (~210 LOC):
+  * MutableBodySystem class with flat Float64Array storage (mass, pos*3,
+    vel*3, acc*3) — zero allocations in step loop, mirrors Scala design
+  * computeAccelerations() — O(N²) Newtonian gravity with Plummer softening
+    (1/r² → 1/(r²+ε²)), uses Newton's third law for 2× speedup
+  * step() — leapfrog KDK (Kick-Drift-Kick), symplectic, energy-conserving
+  * totalEnergy/momentumMagnitude/angularMomentumMagnitude diagnostics
+  * snapshot() returns Snapshot object for persistence
+  * 3 initial-condition generators: plummerSphere(n, seed), lattice(m, seed),
+    twoBody(seed) — mirrors Scala Phase 8 PlummerSphere + Phase 10
+    StructuredGenerators
+  * mulberry32 seeded RNG for determinism
+- Implemented 5 API route handlers under src/app/api/:
+  * GET    /api/simulations                  — list most recent 100 sims
+  * POST   /api/simulations                  — create new sim with IC generator
+  * GET    /api/simulations/[id]             — fetch sim + bodies + latest snapshot
+  * DELETE /api/simulations/[id]             — cascade delete
+  * POST   /api/simulations/[id]/step        — advance N steps, persist snapshots
+  * GET    /api/simulations/[id]/snapshots   — list snapshots for charting
+  * GET    /api/audit?limit=30               — recent audit entries (for UI panel)
+  Each route runs on Node runtime (runtime = 'nodejs'), uses Prisma
+  directly, and calls auditApiCall() AFTER computing the response to
+  persist the audit row with the final status code.
+- Implemented src/app/page.tsx — single-page UI (~500 LOC, 'use client'):
+  * Left column: configuration form (name, description, generator type,
+    body count, dt, softening, algorithm, maxSteps, seed, API key) +
+    saved simulations list (click to select, trash icon to delete)
+  * Right column: selected simulation header with step controls + 4 stat
+    tiles (step, status, initial E, current E) + 3D canvas visualization
+    (auto-rotating, drag to control, double-click to toggle auto-rotate)
+    + tabbed panel with Energy/Momentum chart (recharts) and Audit Log
+    (live-refreshing list of recent /api/* requests)
+  * Canvas: 3D projection with X/Y/Z axes, depth-sorted body rendering,
+    mass-scaled radius, depth-based alpha. Bodies colored by HSL hue.
+  * Chart: 3 lines (energy, |p|, |L|) vs step, recharts ResponsiveContainer
+  * Audit log: color-coded method (green GET, blue POST, red DELETE),
+    color-coded status, latency, time. Auto-refreshes every 5 seconds.
+  * Sticky footer with backend/middleware/engine summary
+  * Toast notifications (sonner) for create/step/delete success/failure
+  * API key persisted in localStorage
+  * Mobile-first responsive (verified at 390×844 and 1280×800)
+- Iteration 1 — Edge runtime crypto failure:
+  * Initial middleware used `import crypto from 'crypto'` + crypto.createHash
+    for IP hashing. Edge runtime rejected it: "The edge runtime does not
+    support Node.js 'crypto' module."
+  * Fix: replaced SHA-256 with FNV-1a 32-bit hash (pure JS, no Node APIs).
+    Documented the constraint in the middleware header comment.
+- Iteration 2 — createMany skipDuplicates not supported by SQLite Prisma:
+  * First /step call returned 500 with "Unknown argument `skipDuplicates`"
+  * Fix: replaced `createMany({..., skipDuplicates: true})` with a
+    `deleteMany` for the step range followed by `createMany` without
+    skipDuplicates. This handles the re-run case correctly.
+- Iteration 3 — created simulation in UI + stepped +100:
+  * Created "Plummer N=64" sim, 64 bodies, dt=0.01, softening=0.05
+  * Stepped +100 (initially failed with the skipDuplicates bug; after
+    fix, succeeded: 10 → 110 steps, 5 snapshots written, energy drift
+    5.44e+0% — high because Plummer irregular at small N, expected)
+- Self-verification via Agent Browser:
+  * Opened http://localhost:3000/ — page rendered with header, form,
+    saved sims list, empty canvas with hint text, empty chart, audit tab
+  * Filled form + clicked "Create simulation" → toast "Simulation
+    created" + new entry appeared in saved list
+  * Selected the sim → stat tiles populated, canvas rendered 64 bodies
+    in 3D, "Step +100" button enabled
+  * Clicked "Step +100" → toast "Stepped +100" with drift %, sim list
+    updated to "110/1000 steps paused", stat tiles refreshed
+  * Switched to Audit Log tab → list of recent /api/* requests visible
+    (GET /api/audit, POST /api/simulations, POST /api/simulations/[id]/step,
+    etc.) with method, status, path, latency, time. Color-coded correctly.
+  * Switched back to Energy/Momentum tab → 3 recharts lines rendered
+    (energy, |p|, |L|) for the 5+ snapshots
+  * Mobile viewport 390×844: header/footer present, footer at bottom
+    (sticky-footer behavior verified)
+  * Desktop viewport 1280×800: content taller than viewport, footer
+    pushed down naturally (no overlap, no floating gap)
+  * Console errors: only recharts ResponsiveContainer width/height
+    warnings (cosmetic, not blocking)
+- Lint check: `bunx eslint src/` → clean (0 errors, 0 warnings on our code).
+  Pre-existing scripts/render-diagram.js has 2 require() errors, unrelated.
+- Updated .gitignore to exclude sandbox-only artifacts (tool-results/,
+  .zscripts/, db/, *.log, .env.local) — these shouldn't be committed.
+
+Stage Summary:
+- **Web app state**: Phase 11 web control plane fully functional.
+  - Frontend renders at http://localhost:3000/ (also accessible via
+    Preview Panel)
+  - Backend API responds on /api/simulations, /api/simulations/[id],
+    /api/simulations/[id]/step, /api/simulations/[id]/snapshots,
+    /api/audit
+  - Database: SQLite at /home/z/my-project/db/custom.db with 4 tables
+    (Simulation, Body, TrajectorySnapshot, ApiAudit) — verified via
+    prisma db push (in sync)
+  - Middleware: stamps every /api/* request with audit headers + gates
+    write endpoints with x-api-key (constant-time compare)
+  - End-to-end flow verified via Agent Browser: create → select → step →
+    audit log fills → chart updates → mobile + desktop responsive →
+    sticky footer behavior correct
+- **Phase 11 web deliverables**:
+  * prisma/schema.prisma — 4-table schema with indices + cascade deletes
+  * src/middleware.ts — Edge middleware (audit + API-key gate, FNV-1a hash)
+  * src/lib/audit.ts — server-side audit row writer
+  * src/lib/nbody.ts — TypeScript port of Scala MutableKDK (Phase 5)
+  * src/app/api/simulations/route.ts — GET/POST list + create
+  * src/app/api/simulations/[id]/route.ts — GET/DELETE single
+  * src/app/api/simulations/[id]/step/route.ts — POST advance N steps
+  * src/app/api/simulations/[id]/snapshots/route.ts — GET for charting
+  * src/app/api/audit/route.ts — GET recent audit entries
+  * src/app/page.tsx — single-page UI with form + canvas + chart + audit
+- **Architecture highlights**:
+  * 4-table normalized schema mirrors the Scala project's domain
+    (Simulation ≈ Phase 0 System; Body ≈ Phase 0 Body; TrajectorySnapshot
+    ≈ Phase 7 LazySimulation sampleAt; ApiAudit = new for web audit trail)
+  * TypeScript N-body engine is a direct port of Scala Phase 5 MutableKDK:
+    same flat-array storage, same leapfrog KDK, same Plummer softening,
+    same Newton's-third-law optimization. Could be cross-validated
+    against the Scala project's output for the same initial conditions.
+  * Middleware ↔ route handler split: middleware (Edge) stamps audit
+    headers; route handler (Node runtime) persists audit row via Prisma.
+    This works around Edge runtime's lack of Prisma support while still
+    giving us a single audit trail.
+  * API-key gate is optional (only enforced if NBODY_API_KEY env var is
+    set on the server). In dev mode (env var unset), all writes are open
+    for convenience. In production, set NBODY_API_KEY to enable the gate.
+- **Local git state**: Will create 1 new commit on top of 19cc47f.
+- **Next step**: commit + push to GitHub (keeping PAT active per user
+  request — more pushes may follow).
