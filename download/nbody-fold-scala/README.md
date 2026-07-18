@@ -18,7 +18,7 @@ Zero-dependency N-body gravitational simulator in Scala 3, demonstrating the **E
 [![Live demo](https://img.shields.io/badge/demo-live-brightgreen)](https://louispenev.github.io/nbody-fold-scala/)
 [![Scala 3.4.2](https://img.shields.io/badge/Scala-3.4.2-red)](https://www.scala-lang.org/)
 [![JDK 21](https://img.shields.io/badge/JDK-21-orange)](https://openjdk.org/)
-[![Phases 0–13](https://img.shields.io/badge/phases-0--13-blue)](#status)
+[![Phases 0–14](https://img.shields.io/badge/phases-0--14-blue)](#status)
 [![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 | Phase | Status | Notes |
@@ -37,6 +37,7 @@ Zero-dependency N-body gravitational simulator in Scala 3, demonstrating the **E
 | 11 — Publication & Handoff Package | ✅ Sandbox-verified | `Manifest.scala` (programmatic project introspection: git SHA, JDK/Scala/sbt versions, file inventory with SHA-256 hashes, total LOC, source-hash tamper seal) + `ReleaseArtifact.scala` (JSON serialization using Phase 2 `Json` AST — reuses parser for round-trip; `parse ∘ render = identity`) + `HANDOFF.md` (8-section maintainer onboarding) + `RELEASE_NOTES.md` (v1.0.0 release summary). Phase11Demo 54/54 self-checks pass; `results/manifest.json` written |
 | 12 — Zero-Dependency Web Tier | ✅ Sandbox-verified | JDK-only HTTP server (`com.sun.net.httpserver.HttpServer`) + file-backed relational store (`Database.scala`: systems/bodies/trajectories tables, JSON+SHA-256 integrity tag per row, in-memory index rebuilt from log replay) + functional middleware (`type Middleware = Handler => Handler`; logging/CORS/HMAC-auth/rate-limit/errors/json-body) + REST routes (POST /api/systems, POST /api/systems/:id/step, GET /api/systems/:id/trajectories, etc.) + single-file HTML/JS frontend (vanilla, no React/Vue/Tailwind). Phase 2 `JsonParser` retrofitted with `JNum(Double)` + `numberP` for standard JSON float support. Phase12Demo 61/61 self-checks pass; end-to-end HTTP round-trip via `java.net.http.HttpClient` verified |
 | 13 — Dynamic Backend + CI | ✅ Deployable | Zero-dependency Node.js dynamic backend (`server/server.js`: `http` module + `global.window` shim reuses `docs/physics.js` + `docs/middleware.js` verbatim; `/api/health` returns live status JSON; JSON-file persistence via atomic tmp+rename; serves static files from `../docs/`). Static demo auto-detects `?backend=<URL>` query param and forwards `/api/*` calls to the real backend. Header badge is **LIVE** (pings `/api/health` every 5s) instead of a static CI badge image. GitHub Actions CI: 3 jobs (Scala 13 demos + Node smoke + dynamic backend end-to-end). One-click deploy via `render.yaml` / `fly.toml`. Smoke test 14/14 PASS; live server: create + step (drift 9.9e-12) + delete roundtrip verified |
+| 14 — 3D Viz + WebSocket Streaming + Metrics | ✅ Sandbox-verified | Hand-rolled 3D engine (`docs/viz3d.js`, ~180 LOC: Vec3 ops, rotation matrices, perspective projection, mouse-drag yaw/pitch, wheel zoom, auto-rotate, star field) on the existing 2D canvas — zero dependencies, no Three.js. 2D/3D toggle in the UI. Pure black canvas background per user feedback (space = black). WebSocket live streaming (`/api/systems/:id/stream`) — hand-rolled RFC 6455 frame parser (~80 LOC) on the server, native `WebSocket` on the client. Trajectory samples now arrive LIVE as the integrator computes them, instead of waiting for the full POST /step response. Prometheus `/metrics` endpoint (12 metrics: requests_total, uptime, system/bodies/trajectory counts, latency avg, ws_connections, drift_last, drift_avg, per-status + per-method counters). Smoke test 21/21 PASS (added 7 3D-math assertions). End-to-end test 6/6 PASS (create → WS subscribe → 10 live samples → done → /metrics drift gauge → delete). Drift 2.5e-12 over 100 steps confirms physics faithful |
 
 ## Zero-Dependency Policy
 
@@ -155,6 +156,63 @@ pings `/api/health` every 5 seconds and shows:
 This is the same observability stance as a Kubernetes liveness probe —
 reflected directly in the UI so users see the same status the operator sees.
 
+## Phase 14 — 3D Visualization + WebSocket Streaming + Metrics
+
+Phase 14 adds three new capabilities, all zero-dependency:
+
+### 1. 3D trajectory visualization (`docs/viz3d.js`)
+
+A hand-rolled 3D engine on the existing 2D canvas — no Three.js, no WebGL,
+no external deps. ~180 LOC of Vec3 ops + rotation matrices + perspective
+projection. Toggle between 2D and 3D from the UI header.
+
+- **Mouse drag** rotates the camera (yaw + pitch)
+- **Wheel** zooms (camera distance)
+- **Auto-rotate** when not dragging (slow spin)
+- **Star field** background (180 stars on a 40-unit sphere)
+- **Gradient trajectory**: green (start) → red (end), temperature-style
+- **Body glow**: radial gradient + white core, scaled by mass and depth
+
+Pure black canvas background per user feedback (space = black). Panels keep
+their slight tint (#0d1117) so the UI chrome still separates from the canvas.
+
+### 2. WebSocket live streaming (`/api/systems/:id/stream`)
+
+Instead of waiting for the full `POST /api/systems/:id/step` response,
+the client opens a WebSocket to `/api/systems/:id/stream` BEFORE the step
+call. The server broadcasts trajectory samples live as the integrator
+computes them:
+
+```
+client opens WS → subscribed
+client POST /step → server broadcasts: start, sample, sample, ..., done
+```
+
+Server-side WebSocket is hand-rolled (~80 LOC) implementing just enough of
+RFC 6455 for text frames in both directions — no `ws` npm package needed.
+Client uses the browser's native `WebSocket`.
+
+### 3. Prometheus `/metrics` endpoint
+
+`GET /api/metrics` emits Prometheus exposition format text. Twelve metrics:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `nbody_requests_total` | counter | Total HTTP requests received |
+| `nbody_uptime_seconds` | gauge | Server uptime in seconds |
+| `nbody_systems_count` | gauge | Current systems in DB |
+| `nbody_bodies_count` | gauge | Current bodies in DB |
+| `nbody_trajectories_count` | gauge | Current trajectory samples in DB |
+| `nbody_request_latency_avg_ms` | gauge | Average request latency (ms) |
+| `nbody_ws_connections_open` | gauge | Currently open WS connections |
+| `nbody_ws_connections_total` | counter | Total WS connections ever opened |
+| `nbody_drift_last` | gauge | Last observed energy drift |
+| `nbody_drift_avg` | gauge | Average energy drift across all step requests |
+| `nbody_requests_by_status{status=N}` | counter | Per-status-code request counts |
+| `nbody_requests_by_method{method=M}` | counter | Per-method request counts |
+
+Point Grafana at `https://<your-backend>/api/metrics` for a live dashboard.
+
 ## Directory Layout
 
 ```
@@ -262,22 +320,24 @@ nbody-fold-scala/
     ├── manifest.json                          ← Phase 11: canonical release artifact (JSON, reproducible from sbt run)
     └── phase12-db/                            ← Phase 12: file-backed DB log files (systems.log / bodies.log / trajectories.log)
 ├── docs/                                       ← Phase 12.b: static GitHub Pages demo (vanilla JS port)
-│   ├── index.html                              ← UI shell (header + 5 panels + footer)
-│   ├── styles.css                              ← Dark theme
+│   ├── index.html                              ← UI shell (header + 5 panels + footer, 2D/3D toggle)
+│   ├── styles.css                              ← Dark theme, pure-black canvas, .health-badge + .viz-toggle
 │   ├── physics.js                              ← MutableBodySystem + IC generators (1:1 port of Scala Phase 5)
 │   ├── db.js                                   ← IndexedDB wrapper (4 stores, cascade delete) — static mode only
 │   ├── middleware.js                           ← 6-layer chain (error/log/cors/auth/json/dispatch)
 │   ├── routes.js                               ← 8 REST endpoints + dispatcher (static mode)
-│   ├── app.js                                  ← DOM wiring + fetch shim + LIVE backend health checker + canvas
+│   ├── viz3d.js                                ← Phase 14: hand-rolled 3D engine (~180 LOC, Vec3 + projection + mouse drag)
+│   ├── app.js                                  ← DOM wiring + fetch shim + LIVE health checker + 2D/3D renderer + WS client
 │   └── README.md                               ← Demo architecture + try-it guide
 ├── server/                                     ← Phase 13: zero-dependency dynamic Node.js backend
-│   ├── server.js                               ← http module + global.window shim reuses docs/physics.js + docs/middleware.js
+│   ├── server.js                               ← http module + global.window shim + hand-rolled WebSocket + /metrics
 │   ├── package.json                            ← Zero dependencies, Node ≥ 18
 │   └── README.md                               ← Server architecture + deployment guide
 ├── scripts/
-│   └── smoke-test.js                           ← 14/14 PASS: physics + middleware helpers
+│   ├── smoke-test.js                           ← 21/21 PASS: physics + middleware + 3D math helpers
+│   └── e2e-test.js                             ← Phase 14: end-to-end WS streaming + /metrics verification
 ├── .github/workflows/
-│   └── ci.yml                                  ← 3 jobs: Scala 13 demos + Node smoke + dynamic backend roundtrip
+│   └── ci.yml                                  ← 3 jobs: Scala 13 demos + Node smoke + dynamic backend + WS e2e
 ├── render.yaml                                 ← Phase 13: one-click Render Blueprint
 └── fly.toml                                    ← Phase 13: Fly.io deployment config
 ```

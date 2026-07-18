@@ -37,6 +37,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');   // Phase 14: WebSocket handshake SHA-1 + frame masking
 
 // ── Shim global.window so physics.js + middleware.js attach to it ──────────
 global.window = {};
@@ -64,6 +65,163 @@ let db = {
 };
 const startedAt = Date.now();
 let requestCount = 0;
+
+// ── Phase 14: Prometheus-style metrics counters ──────────────────────────
+const metrics = {
+  requestsTotal: 0,
+  requestsByMethod: {},      // {GET: N, POST: N, ...}
+  requestsByPath: {},        // {'/api/health': N, '/api/systems': N, ...}
+  requestsByStatus: {},      // {200: N, 404: N, ...}
+  requestLatencyMsSum: 0,
+  requestLatencyMsCount: 0,
+  wsConnectionsTotal: 0,
+  wsConnectionsOpen: 0,
+  driftObservedSum: 0,
+  driftObservedCount: 0,
+  lastDrift: 0
+};
+
+function recordRequest(method, pathname, status, latencyMs) {
+  metrics.requestsTotal++;
+  metrics.requestsByMethod[method] = (metrics.requestsByMethod[method] || 0) + 1;
+  metrics.requestsByPath[pathname] = (metrics.requestsByPath[pathname] || 0) + 1;
+  metrics.requestsByStatus[status] = (metrics.requestsByStatus[status] || 0) + 1;
+  metrics.requestLatencyMsSum += latencyMs;
+  metrics.requestLatencyMsCount++;
+}
+function recordDrift(drift) {
+  metrics.driftObservedSum += drift;
+  metrics.driftObservedCount++;
+  metrics.lastDrift = drift;
+}
+
+// ── Phase 14: WebSocket subscriber registry ──────────────────────────────
+// Map<systemId, Set<socket>> — when handleStepSystem computes a sample,
+// it broadcasts {type:'sample', sample:{...}} to every subscriber of that
+// system. On completion it broadcasts {type:'done', drift, step}.
+const wsSubscribers = new Map();
+
+function wsSubscribe(systemId, socket) {
+  if (!wsSubscribers.has(systemId)) wsSubscribers.set(systemId, new Set());
+  wsSubscribers.get(systemId).add(socket);
+  metrics.wsConnectionsTotal++;
+  metrics.wsConnectionsOpen++;
+}
+function wsUnsubscribe(systemId, socket) {
+  const set = wsSubscribers.get(systemId);
+  if (set) {
+    set.delete(socket);
+    if (set.size === 0) wsSubscribers.delete(systemId);
+  }
+  if (metrics.wsConnectionsOpen > 0) metrics.wsConnectionsOpen--;
+}
+function wsBroadcast(systemId, msg) {
+  const set = wsSubscribers.get(systemId);
+  if (!set || set.size === 0) return;
+  const payload = JSON.stringify(msg);
+  for (const sock of set) {
+    try { sock.send(payload); } catch (_) { /* socket closed */ }
+  }
+}
+
+// ── Phase 14: hand-rolled WebSocket frame helpers (zero-dependency) ──────
+// Implements RFC 6455 — the minimum needed for text frames in both
+// directions. Server→client frames are unmasked; client→server frames are
+// masked (we unmask on read). No binary frames, no fragmentation, no
+// compression (we don't need them for JSON trajectory samples).
+
+// Compute the Sec-WebSocket-Accept header value from the client's key
+function wsAcceptKey(clientKey) {
+  const MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+  return crypto.createHash('sha1').update(clientKey + MAGIC).digest('base64');
+}
+
+// Encode a text frame (server → client, unmasked)
+function wsEncodeText(str) {
+  const payload = Buffer.from(str, 'utf8');
+  const len = payload.length;
+  let header;
+  if (len < 126) {
+    header = Buffer.alloc(2);
+    header[1] = len;
+  } else if (len < 65536) {
+    header = Buffer.alloc(4);
+    header[1] = 126;
+    header.writeUInt16BE(len, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[1] = 127;
+    header.writeUInt32BE(0, 2);
+    header.writeUInt32BE(len, 6);
+  }
+  header[0] = 0x81;  // FIN + text opcode
+  return Buffer.concat([header, payload]);
+}
+
+// Decode a frame from a Buffer. Returns null if not enough bytes yet.
+// On receipt of opcode 0x8 (close), the socket should be closed.
+function wsDecodeFrame(buf) {
+  if (buf.length < 2) return null;
+  const b0 = buf[0], b1 = buf[1];
+  const opcode = b0 & 0x0f;
+  const masked = (b1 & 0x80) !== 0;
+  let len = b1 & 0x7f;
+  let offset = 2;
+  if (len === 126) {
+    if (buf.length < 4) return null;
+    len = buf.readUInt16BE(2);
+    offset = 4;
+  } else if (len === 127) {
+    if (buf.length < 10) return null;
+    // We don't expect payloads > 4GB — read low 32 bits only
+    len = buf.readUInt32BE(6);
+    offset = 10;
+  }
+  let mask = null;
+  if (masked) {
+    if (buf.length < offset + 4) return null;
+    mask = buf.slice(offset, offset + 4);
+    offset += 4;
+  }
+  if (buf.length < offset + len) return null;
+  let payload = buf.slice(offset, offset + len);
+  if (masked) {
+    payload = Buffer.from(payload);  // copy before mutating
+    for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i % 4];
+  }
+  return { opcode, payload, consumed: offset + len };
+}
+
+// Attach WebSocket semantics to an upgraded socket. Sends a text frame
+// via sock.send(str). Closes cleanly on opcode 8.
+function attachWebSocket(socket, onMessage) {
+  socket._wsBuf = Buffer.alloc(0);
+  socket.send = function (str) {
+    try { socket.write(wsEncodeText(str)); } catch (_) {}
+  };
+  socket.on('data', (chunk) => {
+    socket._wsBuf = Buffer.concat([socket._wsBuf, chunk]);
+    while (socket._wsBuf.length > 0) {
+      const frame = wsDecodeFrame(socket._wsBuf);
+      if (!frame) break;  // need more bytes
+      socket._wsBuf = socket._wsBuf.slice(frame.consumed);
+      if (frame.opcode === 0x8) {
+        // Close frame
+        try { socket.end(); } catch (_) {}
+        return;
+      }
+      if (frame.opcode === 0x1 || frame.opcode === 0x0) {
+        // Text frame (or continuation — we don't fragment, so treat same)
+        const text = frame.payload.toString('utf8');
+        if (onMessage) onMessage(text);
+      }
+      // Ping/pong (opcodes 9/10) — auto-respond with pong, ignore otherwise
+      if (frame.opcode === 0x9) {
+        try { socket.write(Buffer.from([0x8a, 0x00])); } catch (_) {}
+      }
+    }
+  });
+}
 
 // ── Load / save ────────────────────────────────────────────────────────────
 function load() {
@@ -314,25 +472,43 @@ async function handleStepSystem(req, res) {
   const lastTraj = await DB.lastTrajectoryOf(id);
   const e0 = lastTraj ? lastTraj.energy : system.energy();
   let lastEnergy = e0;
-  const init = system.toJSON();
-  // Note: we DON'T insert step-0 here (already inserted at create time);
-  // we sample at every sampleEvery step + the final step.
+  // Phase 14: broadcast a "start" message so clients know to clear stale state
+  wsBroadcast(id, { type: 'start', systemId: id, steps, sampleEvery, energy0: e0 });
   for (let s = 1; s <= steps; s++) {
     system.step(sys.dt);
     if (s % sampleEvery === 0 || s === steps) {
       lastEnergy = system.energy();
       const b0 = system.toJSON()[0];
-      await DB.insertTrajectory(id, (sys.steps || 0) + s,
+      const stepNum = (sys.steps || 0) + s;
+      await DB.insertTrajectory(id, stepNum,
         b0.x, b0.y, b0.z, b0.vx, b0.vy, b0.vz, lastEnergy);
+      // Phase 14: broadcast the sample to any WebSocket subscribers
+      wsBroadcast(id, {
+        type: 'sample',
+        sample: {
+          step: stepNum,
+          x: b0.x, y: b0.y, z: b0.z,
+          vx: b0.vx, vy: b0.vy, vz: b0.vz,
+          energy: lastEnergy
+        }
+      });
     }
   }
   await DB.updateSystemSteps(id, steps);
   const drift = (e0 === 0) ? Math.abs(lastEnergy) : Math.abs(lastEnergy - e0) / Math.abs(e0);
+  recordDrift(drift);
+  // Phase 14: broadcast completion
+  wsBroadcast(id, {
+    type: 'done',
+    systemId: id,
+    step: steps, energy0: e0, energyFinal: lastEnergy,
+    drift, sampled: Math.floor(steps / Math.max(1, sampleEvery))
+  });
   sendJson(res, 200, {
     step: steps, energy0: e0, energyFinal: lastEnergy, drift,
     sampled: Math.floor(steps / Math.max(1, sampleEvery))
   });
-  save();  // persist all the trajectory writes
+  save();
 }
 
 async function handleTrajectories(req, res) {
@@ -364,6 +540,79 @@ async function handleAudit(req, res) {
   sendJson(res, 200, { audit: rows });
 }
 
+// ── Phase 14: Prometheus /metrics endpoint ────────────────────────────────
+// Emits text/plain in Prometheus exposition format. No external deps.
+async function handleMetrics(req, res) {
+  const avgLatency = metrics.requestLatencyMsCount > 0
+    ? (metrics.requestLatencyMsSum / metrics.requestLatencyMsCount).toFixed(2)
+    : '0';
+  const avgDrift = metrics.driftObservedCount > 0
+    ? (metrics.driftObservedSum / metrics.driftObservedCount).toExponential(3)
+    : '0';
+  const uptimeSec = Math.floor((Date.now() - startedAt) / 1000);
+
+  const lines = [];
+  lines.push('# HELP nbody_requests_total Total HTTP requests received.');
+  lines.push('# TYPE nbody_requests_total counter');
+  lines.push('nbody_requests_total ' + metrics.requestsTotal);
+
+  lines.push('# HELP nbody_uptime_seconds Server uptime in seconds.');
+  lines.push('# TYPE nbody_uptime_seconds gauge');
+  lines.push('nbody_uptime_seconds ' + uptimeSec);
+
+  lines.push('# HELP nbody_systems_count Current number of systems in the DB.');
+  lines.push('# TYPE nbody_systems_count gauge');
+  lines.push('nbody_systems_count ' + db.systems.length);
+
+  lines.push('# HELP nbody_bodies_count Current number of bodies in the DB.');
+  lines.push('# TYPE nbody_bodies_count gauge');
+  lines.push('nbody_bodies_count ' + db.bodies.length);
+
+  lines.push('# HELP nbody_trajectories_count Current number of trajectory samples in the DB.');
+  lines.push('# TYPE nbody_trajectories_count gauge');
+  lines.push('nbody_trajectories_count ' + db.trajectories.length);
+
+  lines.push('# HELP nbody_request_latency_avg_ms Average request latency in ms.');
+  lines.push('# TYPE nbody_request_latency_avg_ms gauge');
+  lines.push('nbody_request_latency_avg_ms ' + avgLatency);
+
+  lines.push('# HELP nbody_ws_connections_open Currently open WebSocket connections.');
+  lines.push('# TYPE nbody_ws_connections_open gauge');
+  lines.push('nbody_ws_connections_open ' + metrics.wsConnectionsOpen);
+
+  lines.push('# HELP nbody_ws_connections_total Total WebSocket connections ever opened.');
+  lines.push('# TYPE nbody_ws_connections_total counter');
+  lines.push('nbody_ws_connections_total ' + metrics.wsConnectionsTotal);
+
+  lines.push('# HELP nbody_drift_last Last observed energy drift from /api/systems/:id/step.');
+  lines.push('# TYPE nbody_drift_last gauge');
+  lines.push('nbody_drift_last ' + metrics.lastDrift.toExponential(6));
+
+  lines.push('# HELP nbody_drift_avg Average energy drift across all step requests.');
+  lines.push('# TYPE nbody_drift_avg gauge');
+  lines.push('nbody_drift_avg ' + avgDrift);
+
+  // Per-status counters
+  lines.push('# HELP nbody_requests_by_status Total requests by HTTP status code.');
+  lines.push('# TYPE nbody_requests_by_status counter');
+  for (const [status, count] of Object.entries(metrics.requestsByStatus)) {
+    lines.push('nbody_requests_by_status{status="' + status + '"} ' + count);
+  }
+  // Per-method counters
+  lines.push('# HELP nbody_requests_by_method Total requests by HTTP method.');
+  lines.push('# TYPE nbody_requests_by_method counter');
+  for (const [method, count] of Object.entries(metrics.requestsByMethod)) {
+    lines.push('nbody_requests_by_method{method="' + method + '"} ' + count);
+  }
+
+  const body = lines.join('\n') + '\n';
+  res.writeHead(200, {
+    'Content-Type': 'text/plain; version=0.0.4; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body)
+  });
+  res.end(body);
+}
+
 // ── Dispatcher ────────────────────────────────────────────────────────────
 async function dispatch(req, res) {
   const segs = req.pathname.replace(/^\/+/, '').split('/').filter(s => s.length > 0);
@@ -371,6 +620,7 @@ async function dispatch(req, res) {
   try {
     if (m === 'OPTIONS') return sendJson(res, 204, null);
     if (m === 'GET'    && segs.length === 2 && segs[0] === 'api' && segs[1] === 'health')        return handleHealth(req, res);
+    if (m === 'GET'    && segs.length === 2 && segs[0] === 'api' && segs[1] === 'metrics')       return handleMetrics(req, res);
     if (m === 'GET'    && segs.length === 2 && segs[0] === 'api' && segs[1] === 'systems')        return handleListSystems(req, res);
     if (m === 'POST'   && segs.length === 2 && segs[0] === 'api' && segs[1] === 'systems')        return handleCreateSystem(req, res);
     if (m === 'GET'    && segs.length === 3 && segs[0] === 'api' && segs[1] === 'systems')        return handleGetSystem(req, res);
@@ -423,6 +673,12 @@ const server = http.createServer((req, res) => {
   req.query = Object.fromEntries(parsed.searchParams.entries());
   const t0 = Date.now();
 
+  // ── Phase 14: WebSocket upgrade for /api/systems/:id/stream ────────────
+  // The 'upgrade' event is emitted below — this branch handles only
+  // non-upgrade HTTP requests. WebSocket upgrade is wired in the
+  // server.on('upgrade', ...) listener further down.
+  // (No change to HTTP request handling here — WS is handled separately.)
+
   // CORS preflight
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
@@ -437,6 +693,7 @@ const server = http.createServer((req, res) => {
   if (req.pathname.startsWith('/api/')) {
     if (!requireAuth(req, res)) {
       DB.insertAudit({ method: req.method, path: req.pathname, status: 401, ms: Date.now() - t0, meta: 'auth_failed' });
+      recordRequest(req.method, req.pathname, 401, Date.now() - t0);
       save();
       return;
     }
@@ -445,6 +702,7 @@ const server = http.createServer((req, res) => {
         if (err) {
           sendJson(res, 400, { error: 'invalid_json_body' });
           await DB.insertAudit({ method: req.method, path: req.pathname, status: 400, ms: Date.now() - t0, meta: err.message });
+          recordRequest(req.method, req.pathname, 400, Date.now() - t0);
           save();
           return;
         }
@@ -455,7 +713,9 @@ const server = http.createServer((req, res) => {
         const _writeHead = res.writeHead.bind(res);
         res.writeHead = function (status, ...rest) { _status = status; return _writeHead(status, ...rest); };
         res.end = function (...args) {
-          DB.insertAudit({ method: req.method, path: req.pathname, status: _status, ms: Date.now() - t0, meta: null })
+          const ms = Date.now() - t0;
+          recordRequest(req.method, req.pathname, _status, ms);
+          DB.insertAudit({ method: req.method, path: req.pathname, status: _status, ms, meta: null })
             .then(() => save())
             .catch(() => {});
           return _origEnd(...args);
@@ -468,7 +728,9 @@ const server = http.createServer((req, res) => {
       const _writeHead = res.writeHead.bind(res);
       res.writeHead = function (status, ...rest) { _status = status; return _writeHead(status, ...rest); };
       res.end = function (...args) {
-        DB.insertAudit({ method: req.method, path: req.pathname, status: _status, ms: Date.now() - t0, meta: null })
+        const ms = Date.now() - t0;
+        recordRequest(req.method, req.pathname, _status, ms);
+        DB.insertAudit({ method: req.method, path: req.pathname, status: _status, ms, meta: null })
           .then(() => save())
           .catch(() => {});
         return _origEnd(...args);
@@ -482,6 +744,68 @@ const server = http.createServer((req, res) => {
   serveStatic(req, res);
 });
 
+// ── Phase 14: WebSocket upgrade handler ───────────────────────────────────
+server.on('upgrade', (req, socket) => {
+  // Only handle /api/systems/:id/stream — reject everything else
+  const parsed = new URL(req.url, 'http://localhost');
+  const segs = parsed.pathname.replace(/^\/+/, '').split('/').filter(s => s.length > 0);
+  const isStream = segs.length === 4 && segs[0] === 'api' && segs[1] === 'systems' && segs[3] === 'stream';
+  if (!isStream) {
+    socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  // Auth check (same X-Api-Key header)
+  const key = req.headers['x-api-key'] || '';
+  const ok = key && (API_KEY === 'demo' ? key.length > 0 : MW.safeEqual(key, API_KEY));
+  if (!ok) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  // Validate WebSocket upgrade headers
+  const wsKey = req.headers['sec-websocket-key'];
+  if (!wsKey) {
+    socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  // Send the 101 Switching Protocols handshake
+  const accept = wsAcceptKey(wsKey);
+  socket.write(
+    'HTTP/1.1 101 Switching Protocols\r\n' +
+    'Upgrade: websocket\r\n' +
+    'Connection: Upgrade\r\n' +
+    'Sec-WebSocket-Accept: ' + accept + '\r\n' +
+    '\r\n'
+  );
+  // Register the subscriber
+  const systemId = parseInt(segs[2], 10);
+  if (!Number.isFinite(systemId)) {
+    socket.write(wsEncodeText(JSON.stringify({ type: 'error', message: 'invalid_id' })));
+    socket.end();
+    return;
+  }
+  wsSubscribe(systemId, socket);
+  // Attach the WebSocket data handler (handles close/ping/text frames)
+  attachWebSocket(socket, (text) => {
+    // We don't expect client→server messages other than close frames, but
+    // if a client sends text we'll just echo a friendly acknowledgment.
+    try { socket.send(JSON.stringify({ type: 'ack', text: text.slice(0, 100) })); } catch (_) {}
+  });
+  // Send a hello so the client knows the subscription is live
+  try {
+    socket.send(JSON.stringify({
+      type: 'subscribed',
+      systemId,
+      message: 'You will receive sample/done events when POST /api/systems/' + systemId + '/step is called.'
+    }));
+  } catch (_) {}
+  // Clean up on close
+  socket.on('close', () => wsUnsubscribe(systemId, socket));
+  socket.on('error', () => wsUnsubscribe(systemId, socket));
+});
+
 // ── Start ─────────────────────────────────────────────────────────────────
 load();
 server.listen(PORT, () => {
@@ -493,6 +817,8 @@ server.listen(PORT, () => {
   console.log('  docs    :', DOCS_DIR);
   console.log('  data    :', DATA_FILE);
   console.log('  health  : http://localhost:' + PORT + '/api/health');
+  console.log('  metrics : http://localhost:' + PORT + '/api/metrics');
+  console.log('  ws      : ws://localhost:' + PORT + '/api/systems/:id/stream');
   console.log('  demo    : http://localhost:' + PORT + '/');
   console.log('  external: https://louispenev.github.io/nbody-fold-scala/?backend=http://localhost:' + PORT);
 });

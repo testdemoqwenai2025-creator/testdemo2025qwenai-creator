@@ -77,11 +77,18 @@
     </section>
 
     <section class="panel canvas-panel">
-      <h2>Trajectory + energy drift</h2>
+      <h2>
+        Trajectory + energy drift
+        <span class="viz-toggle">
+          <button id="viz-2d" class="active">2D</button>
+          <button id="viz-3d">3D</button>
+        </span>
+      </h2>
       <div class="canvas-wrap">
-        <canvas id="traj-canvas" width="640" height="320"></canvas>
-        <canvas id="energy-canvas" width="640" height="160"></canvas>
+        <canvas id="traj-canvas" width="800" height="420"></canvas>
+        <canvas id="energy-canvas" width="800" height="140"></canvas>
       </div>
+      <p class="hint" id="viz-hint">2D projection (XY plane). Click 3D for a rotatable perspective view.</p>
     </section>
 
     <section class="panel">
@@ -99,11 +106,12 @@
   </footer>
 
   <!-- Scripts loaded in order: physics first (no deps), then db, middleware,
-       routes, then app.js (the main controller). -->
+       routes, viz3d (3D engine), then app.js (the main controller). -->
   <script src="physics.js"></script>
   <script src="db.js"></script>
   <script src="middleware.js"></script>
   <script src="routes.js"></script>
+  <script src="viz3d.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

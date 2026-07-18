@@ -639,3 +639,202 @@ Browser              │  docs/app.js  (fetch shim)          │
    header is the visible Phase 13 deliverable; in dynamic mode users see
    real-time UP/DOWN + latency + version + region + uptime + request count
 4. ✅ Improvement suggestions for Phase 14: see worklog Task ID 15c
+
+---
+
+## Section 11 — Phase 14: 3D Visualization + WebSocket Streaming + Metrics
+
+### Goal
+
+Three additions, all zero-dependency, motivated by user feedback:
+1. **3D visualization layer** that "pops out" — user asked for a real
+   3D view instead of the 2D XY projection.
+2. **Pure black background** — user observed that the slight blue tint
+   (#0d1117) didn't match the "space" scenario; pure black is more honest.
+3. **WebSocket streaming + /metrics** — natural Phase 14 deliverables
+   from the previous round's improvement-suggestions list.
+
+### Deliverables
+
+1. **`docs/viz3d.js`** (~180 LOC) — hand-rolled 3D engine on the 2D canvas:
+   - Vec3 ops: add, sub, scale, dot, cross, len, norm
+   - Rotation matrices: `rotX`/`rotY`/`rotZ` (right-handed, counterclockwise)
+   - `Camera` class with `yaw`/`pitch`/`dist`/`focal` parameters
+   - `project(v, camera, w, h)` — perspective projection with z>cull
+   - `Renderer` class with mouse-drag yaw/pitch, wheel zoom, auto-rotate,
+     star field, gradient trajectory (green→red), body glow
+   - `startAnimationLoop()` — requestAnimationFrame driver
+   - No Three.js, no WebGL, no external deps
+
+2. **`docs/index.html`** — added 2D/3D toggle in the canvas panel header,
+   larger canvas (800×420), and `<script src="viz3d.js">` load.
+
+3. **`docs/styles.css`** — pure black canvas bg (#000000), pure black
+   audit-log bg, `.viz-toggle` button group styling, `.hint` text style,
+   topbar gradient now fades from #0d1117 to #000000.
+
+4. **`docs/app.js`** — wired the 2D/3D toggle, added `renderTrajectory3D`
+   that creates the Viz3D.Renderer and starts its animation loop, added
+   `openLiveStream(id)` that opens a WebSocket before the POST /step call
+   and appends received samples to the canvas in real time.
+
+5. **`server/server.js`** — three additions:
+   - **Hand-rolled WebSocket** (~80 LOC): `wsAcceptKey` (SHA-1+base64 of
+     client key + magic GUID), `wsEncodeText` (server→client unmasked
+     text frame), `wsDecodeFrame` (client→server masked frame parser),
+     `attachWebSocket` (binds a data handler to a socket). Uses only
+     Node's `crypto` and `Buffer` — no `ws` npm package.
+   - **`server.on('upgrade', ...)` handler** for `/api/systems/:id/stream`:
+     validates the upgrade headers, sends 101 Switching Protocols,
+     registers the socket in `wsSubscribers` map, sends `subscribed`
+     acknowledgment, cleans up on close/error.
+   - **`handleStepSystem` now broadcasts** `{type:'start'}`, then
+     `{type:'sample', sample:{step,x,y,z,vx,vy,vz,energy}}` for each
+     sampled step, then `{type:'done', drift, step, ...}` on completion.
+   - **`/api/metrics` endpoint** — Prometheus exposition format text.
+     Twelve metrics: requests_total (counter), uptime_seconds (gauge),
+     systems_count/bodies_count/trajectories_count (gauges),
+     request_latency_avg_ms (gauge), ws_connections_open (gauge),
+     ws_connections_total (counter), drift_last (gauge), drift_avg
+     (gauge), requests_by_status{status=N} (counter),
+     requests_by_method{method=M} (counter).
+   - **`recordRequest` and `recordDrift`** hooks wired into the HTTP
+     response wrappers and `handleStepSystem` respectively.
+
+6. **`scripts/smoke-test.js`** — added section 6 with 7 new 3D-math
+   assertions: vAdd, vDot, vCross, rotY by π/2, perspective projection
+   of origin (canvas center), behind-camera culling, yaw=π/2 rotation.
+   Total: 21/21 PASS (was 14/14).
+
+7. **`scripts/e2e-test.js`** (new, ~180 LOC) — Phase 14 integration test:
+   - Verifies `/api/health` and `/api/metrics` (Prometheus format)
+   - Creates a 2-body Kepler system
+   - Opens a WebSocket to `/api/systems/:id/stream` via raw `net.Socket`
+     (does the RFC 6455 handshake manually)
+   - Triggers POST /step on a separate HTTP connection
+   - Asserts the WS receives `subscribed` → `start` → 10× `sample` →
+     `done` (13 messages total)
+   - Verifies `/api/metrics` shows `nbody_drift_last` and `nbody_drift_avg`
+     after the step
+   - Deletes the system, confirms 404 on subsequent GET
+
+8. **`.github/workflows/ci.yml`** — added `/api/metrics` format check
+   and replaced the bash end-to-end with `node scripts/e2e-test.js`
+   (the e2e test is more thorough: it exercises WS streaming which
+   the bash version couldn't).
+
+### Verification
+
+```
+$ node scripts/smoke-test.js
+  ... (sections 1-5 unchanged) ...
+6. 3D engine math (viz3d.js — Phase 14)
+  ✓ vAdd(1,2,3)+(4,5,6) = (5,7,9)
+  ✓ vDot((1,2,3),(4,5,6)) = 32
+  ✓ vCross(x̂, ŷ) = ẑ
+  ✓ rotY((1,0,0), π/2) ≈ (0,0,-1)
+  ✓ project origin → canvas center
+  ✓ point behind camera culled (null)
+  ✓ camera yaw=π/2 rotates world X out of view
+────────────────────────────────────
+  PASS: 21  FAIL: 0
+────────────────────────────────────
+
+$ node scripts/e2e-test.js   (with server running on 3197)
+Phase 14 end-to-end test
+  /api/health → 200 ok
+  /api/metrics → 200 (1676 bytes)
+  ✓ Prometheus format OK
+  create → 201 id=1
+  ✓ WebSocket handshake 101 Switching Protocols
+  [ws] subscribed
+  [ws] start
+  [ws] sample step=10
+  [ws] sample step=20
+  [ws] sample step=30
+  [ws] sample step=40
+  [ws] sample step=50
+  [ws] sample step=60
+  [ws] sample step=70
+  [ws] sample step=80
+  [ws] sample step=90
+  [ws] sample step=100
+  [ws] done
+  POST /step → 200 drift=2.4938818371536514e-12
+  WebSocket received 13 messages
+  subscribed: true  start: true  samples: 10  done: true
+  ✓ WebSocket streaming end-to-end
+  ✓ /metrics drift gauges populated
+  delete → 200
+
+Phase 14 end-to-end: ALL PASS
+```
+
+### Design choices
+
+1. **Why hand-roll 3D instead of pulling in Three.js?**
+   Three.js is ~600 KB minified, would break the zero-dependency
+   philosophy that governs the Scala tier AND the Phase 12-13 web tier,
+   and would require a build step (npm + bundler). The trajectory
+   rendering use case is simple enough (project N points, draw a
+   polyline + dots) that 180 LOC of canvas-2D + Math.sin/cos suffices.
+   The user gets full mouse-drag rotation, wheel zoom, auto-rotate,
+   star field, gradient trajectory, and body glow — for free.
+
+2. **Why hand-roll WebSocket instead of using the `ws` npm package?**
+   Same reason. The `ws` package is ~50 KB and brings in 6 transitive
+   deps. The Phase 14 use case is text-frame-only, single-path
+   (server→client broadcasts), no fragmentation, no compression.
+   ~80 LOC implements just enough of RFC 6455: SHA-1 handshake, frame
+   encoding (7/16/64-bit length), frame decoding with mask removal,
+   ping/pong auto-response, close handling. Stays zero-dep.
+
+3. **Why pure black canvas background?**
+   User feedback: "if we keep the background complete black, does that
+   not reflect the scenario". Yes — space is black, so the previous
+   #010409 (canvas) and #0d1117 (page bg) had a slight blue tint that
+   fought the metaphor. Pure #000 makes the trajectory dots and orbital
+   trail pop more. We keep the panels at #0d1117 so the UI chrome
+   separates from the canvas (otherwise the panels visually merge with
+   the canvas when there's no data).
+
+4. **Why a 2D/3D toggle instead of replacing 2D?**
+   Some users prefer the 2D XY projection for understanding orbital
+   planes (a 2-body Kepler orbit lives in a plane — the 2D view shows
+   the actual ellipse, while 3D shows it from an angle). Toggle
+   preserves both views.
+
+5. **Why Prometheus text format instead of OpenMetrics or JSON?**
+   Prometheus text format is the de-facto standard — every monitoring
+   tool (Grafana, Datadog, New Relic, VictoriaMetrics, Mimir) ingests
+   it natively. JSON would require a custom adapter. OpenMetrics is
+   stricter but not yet widely supported. Sticking with the simplest
+   thing that works.
+
+### Standing directives satisfied
+
+1. ✅ skills.md updated with Phase 14 spec (this section)
+2. ✅ GitHub push (immediately after smoke + e2e tests pass)
+3. ✅ Demo with frontend-visible output — the 3D toggle, star field,
+   gradient trajectory, and live WebSocket streaming are all visible
+   in the demo UI. The /metrics endpoint is visible to operators.
+4. ✅ Improvement suggestions for Phase 15: see worklog Task ID 16
+
+### Phase 15 candidates (forward-looking)
+
+1. **Barnes-Hut on the server** — port the Scala Phase 9 solver to JS
+   so the dynamic backend handles N>2000 in reasonable time. Currently
+   O(N²) brute force.
+2. **Multi-body trajectory persistence** — currently only the first
+   body's trajectory is sampled. Add `/api/systems/:id/trajectories/all`
+   returning all bodies' trajectories, with server-side downsampling.
+3. **JWT auth + multi-tenant** — replace shared NBODY_API_KEY with
+   JWT-issued per-user tokens. Add User + Session tables.
+4. **Phase 9/10 JIT warmup fix** — add a pre-main warmup loop in
+   Phase9Demo/Phase10Demo so CI runners with cold JITs produce stable
+   numbers. Removes the continue-on-error escape hatch.
+5. **Grafana dashboard JSON** — ship a ready-to-import Grafana
+   dashboard JSON in `docs/grafana-dashboard.json` that consumes the
+   `/api/metrics` endpoint.
+6. **3D trajectory persistence across sessions** — store the camera
+   yaw/pitch/dist in URL hash so users can share a specific view.

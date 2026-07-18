@@ -260,6 +260,9 @@
     const steps = parseInt(document.getElementById('step-count').value, 10);
     const sampleEvery = parseInt(document.getElementById('step-sample').value, 10);
     if (!id) { alert('Pick a system id first'); return; }
+    // Phase 14: in dynamic mode, open the live stream BEFORE the POST so
+    // we receive samples as they're computed server-side.
+    if (IS_DYNAMIC) openLiveStream(id);
     const res = await fetch('/api/systems/' + id + '/step', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Api-Key': 'demo' },
@@ -275,17 +278,44 @@
   }
 
   // ── Load trajectories + render canvas ───────────────────────────────────
+  // Phase 14: 2D/3D toggle. 3D mode uses Viz3D.Renderer with mouse-drag
+  // rotation + auto-rotate + perspective projection + star field. 2D mode
+  // is the original XY projection (preserved for users who want it).
+  let _viz3dRenderer = null;
+  let _currentTrajectory = [];
+  let _currentBodies = [];
+  let _is3DMode = false;
+  let _animationStop = null;
+
   async function loadTrajectories(id) {
     const res = await fetch('/api/systems/' + id + '/trajectories');
     const j = await res.json();
-    renderTrajectory(j.trajectories || []);
-    renderEnergy(j.trajectories || []);
+    _currentTrajectory = j.trajectories || [];
+    // Also fetch the current body positions for the 3D renderer's "current state" dots
+    try {
+      const sysRes = await fetch('/api/systems/' + id);
+      const sysJ = await sysRes.json();
+      _currentBodies = (sysJ.bodies || []).map(b => ({ x: b.x, y: b.y, z: b.z, mass: b.mass }));
+    } catch (_) { _currentBodies = []; }
+    renderTrajectory(_currentTrajectory);
+    renderEnergy(_currentTrajectory);
   }
 
   function renderTrajectory(rows) {
+    if (_is3DMode) {
+      renderTrajectory3D(rows);
+    } else {
+      renderTrajectory2D(rows);
+    }
+  }
+
+  function renderTrajectory2D(rows) {
+    // Stop any 3D animation loop
+    if (_animationStop) { _animationStop(); _animationStop = null; }
     const c = document.getElementById('traj-canvas');
     const ctx = c.getContext('2d');
-    ctx.fillStyle = '#010409';
+    // Phase 14: pure black background per user feedback
+    ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, c.width, c.height);
     if (rows.length === 0) return;
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -310,7 +340,7 @@
       if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     }
     ctx.stroke();
-    // Mark start/end
+    // Mark start (green) and end (red)
     ctx.fillStyle = '#3fb950';
     const f = rows[0];
     ctx.beginPath();
@@ -323,10 +353,41 @@
     ctx.fill();
   }
 
+  function renderTrajectory3D(rows) {
+    const c = document.getElementById('traj-canvas');
+    if (!_viz3dRenderer) {
+      _viz3dRenderer = new window.Viz3D.Renderer(c);
+    }
+    _viz3dRenderer.setTrajectory(rows);
+    _viz3dRenderer.setBodies(_currentBodies);
+    _viz3dRenderer.setAutoRotate(true);
+    // Start the animation loop (returns a stop function)
+    if (!_animationStop) {
+      _animationStop = _viz3dRenderer.startAnimationLoop();
+    }
+  }
+
+  function setVizMode(mode3D) {
+    _is3DMode = !!mode3D;
+    document.getElementById('viz-2d').classList.toggle('active', !_is3DMode);
+    document.getElementById('viz-3d').classList.toggle('active',  _is3DMode);
+    document.getElementById('viz-hint').textContent = _is3DMode
+      ? '3D perspective view. Drag to rotate · wheel to zoom · auto-rotates when idle.'
+      : '2D projection (XY plane). Click 3D for a rotatable perspective view.';
+    // Re-render with the new mode using the current data
+    if (_currentTrajectory.length > 0 || _currentBodies.length > 0) {
+      renderTrajectory(_currentTrajectory);
+    } else {
+      // Empty render just to flip the canvas to the right bg
+      renderTrajectory([]);
+    }
+  }
+
   function renderEnergy(rows) {
     const c = document.getElementById('energy-canvas');
     const ctx = c.getContext('2d');
-    ctx.fillStyle = '#010409';
+    // Phase 14: pure black
+    ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, c.width, c.height);
     if (rows.length < 2) return;
     let e0 = rows[0].energy;
@@ -348,12 +409,52 @@
     ctx.fillText('log10(rel drift)  max=' + maxD.toExponential(2), pad, 14);
   }
 
+  // ── WebSocket live streaming (Phase 14) ─────────────────────────────────
+  // When the user clicks "Run", in DYNAMIC mode we ALSO open a WebSocket to
+  // /api/systems/:id/stream so we can render trajectory samples live as the
+  // integrator computes them (instead of waiting for the full POST /step to
+  // finish).
+  let _ws = null;
+  function openLiveStream(id) {
+    if (!IS_DYNAMIC) return;  // static mode has no server to stream from
+    if (!window.WebSocket) return;
+    if (_ws) { try { _ws.close(); } catch (_) {} _ws = null; }
+    const wsUrl = DYNAMIC_BACKEND.replace(/^http/, 'ws') + '/api/systems/' + id + '/stream';
+    try {
+      _ws = new WebSocket(wsUrl);
+      _ws.onopen = () => appendAuditLog({ method: 'WS', path: '/api/systems/' + id + '/stream', status: 101, ms: 0, meta: 'connected' });
+      _ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (msg.type === 'sample' && msg.sample) {
+            // Append to current trajectory and re-render
+            _currentTrajectory.push(msg.sample);
+            if (_currentTrajectory.length > 500) _currentTrajectory.shift();
+            renderTrajectory(_currentTrajectory);
+            renderEnergy(_currentTrajectory);
+          } else if (msg.type === 'done') {
+            appendAuditLog({ method: 'WS', path: '/api/systems/' + id + '/stream', status: 200, ms: 0,
+                             meta: 'done drift=' + (msg.drift || 0).toExponential(3) });
+          }
+        } catch (_) {}
+      };
+      _ws.onerror = () => appendAuditLog({ method: 'WS', path: '/api/systems/' + id + '/stream', status: 0, ms: 0, meta: 'error' });
+      _ws.onclose = () => { _ws = null; };
+    } catch (e) {
+      appendAuditLog({ method: 'WS', path: '/api/systems/' + id + '/stream', status: 0, ms: 0, meta: 'open_failed' });
+    }
+  }
+
   // ── Wire up ──────────────────────────────────────────────────────────────
   document.getElementById('create').addEventListener('click', createSystem);
   document.getElementById('step-run').addEventListener('click', stepSystem);
   document.getElementById('refresh').addEventListener('click', refreshSystems);
+  document.getElementById('viz-2d').addEventListener('click', () => setVizMode(false));
+  document.getElementById('viz-3d').addEventListener('click', () => setVizMode(true));
 
   // Initial state
   refreshSystems();
   startHealthPoll();
+  // Initial empty canvas paint so the canvas doesn't show the browser default
+  renderTrajectory([]);
 })();

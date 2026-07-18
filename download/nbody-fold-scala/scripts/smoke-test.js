@@ -23,9 +23,11 @@ const fs = require('fs');
 const docsDir = path.resolve(__dirname, '..', 'docs');
 require(path.join(docsDir, 'physics.js'));
 require(path.join(docsDir, 'middleware.js'));
+require(path.join(docsDir, 'viz3d.js'));   // Phase 14
 
 const P = global.window.NBodyPhysics;
 const MW = global.window.NBodyMiddleware;
+const V3 = global.window.Viz3D;
 
 let pass = 0, fail = 0;
 function assert(name, cond, extra) {
@@ -107,6 +109,49 @@ function assert(name, cond, extra) {
       'got ' + r1);
     assert('empty key → <empty>', MW.redactKey('') === '<empty>');
     assert('short key → all asterisks', MW.redactKey('ab') === '**');
+  }
+  console.log('');
+
+  // ── 6. 3D math (Phase 14) ──────────────────────────────────────────────
+  console.log('6. 3D engine math (viz3d.js — Phase 14)');
+  {
+    // Vec3 ops
+    const a = V3.Vec3(1, 2, 3);
+    const b = V3.Vec3(4, 5, 6);
+    const sum = V3.vAdd(a, b);
+    assert('vAdd(1,2,3)+(4,5,6) = (5,7,9)',
+      sum.x === 5 && sum.y === 7 && sum.z === 9);
+    const dot = V3.vDot(a, b);
+    assert('vDot((1,2,3),(4,5,6)) = 32', dot === 32, 'got ' + dot);
+    const cross = V3.vCross(V3.Vec3(1, 0, 0), V3.Vec3(0, 1, 0));
+    assert('vCross(x̂, ŷ) = ẑ', cross.x === 0 && cross.y === 0 && cross.z === 1,
+      'got ' + JSON.stringify(cross));
+
+    // Rotations
+    const r90y = V3.rotY(V3.Vec3(1, 0, 0), Math.PI / 2);
+    assert('rotY((1,0,0), π/2) ≈ (0,0,-1)',
+      Math.abs(r90y.x) < 1e-12 && Math.abs(r90y.y) < 1e-12 && Math.abs(r90y.z + 1) < 1e-12,
+      'got ' + JSON.stringify(r90y));
+
+    // Perspective projection: point at origin, camera dist=8, focal=600
+    const cam = new V3.Camera({ yaw: 0, pitch: 0, dist: 8, focal: 600 });
+    const proj = V3.project(V3.Vec3(0, 0, 0), cam, 800, 400);
+    assert('project origin → canvas center',
+      Math.abs(proj.x - 400) < 1e-9 && Math.abs(proj.y - 200) < 1e-9,
+      'got ' + JSON.stringify(proj));
+
+    // Point behind camera returns null
+    const behind = V3.project(V3.Vec3(0, 0, -100), cam, 800, 400);
+    assert('point behind camera culled (null)', behind === null);
+
+    // Camera yaw rotates the projection
+    const cam2 = new V3.Camera({ yaw: Math.PI / 2, pitch: 0, dist: 8, focal: 600 });
+    const proj2 = V3.project(V3.Vec3(1, 0, 0), cam2, 800, 400);
+    // After yaw=π/2, world X maps to view Z (depth), so the point at (1,0,0)
+    // should project to the center (no X offset) since its view-x is 0.
+    assert('camera yaw=π/2 rotates world X out of view',
+      Math.abs(proj2.x - 400) < 1e-9,
+      'got x=' + proj2.x);
   }
   console.log('');
 

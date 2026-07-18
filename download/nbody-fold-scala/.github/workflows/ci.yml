@@ -126,11 +126,11 @@ jobs:
       - name: Syntax check server.js
         run: node --check server/server.js
 
-      - name: Smoke test (physics + middleware helpers)
+      - name: Smoke test (physics + middleware + 3D math helpers)
         run: node scripts/smoke-test.js
 
   dynamic-server:
-    name: Dynamic backend (boot + end-to-end roundtrip)
+    name: Dynamic backend (boot + end-to-end roundtrip + WS streaming)
     runs-on: ubuntu-latest
     needs: [static-demo]
     defaults:
@@ -172,6 +172,19 @@ jobs:
           print('  ✓ /api/health returns expected shape')
           "
 
+      - name: Verify /api/metrics (Phase 14 — Prometheus format)
+        run: |
+          set -e
+          RESP=$(curl -s http://localhost:3199/api/metrics)
+          echo "$RESP" | python3 -c "
+          import sys
+          text = sys.stdin.read()
+          assert 'nbody_requests_total' in text, 'missing requests_total'
+          assert 'nbody_uptime_seconds' in text, 'missing uptime'
+          assert '# HELP' in text and '# TYPE' in text, 'missing HELP/TYPE'
+          print('  ✓ /api/metrics Prometheus format OK')
+          "
+
       - name: Auth check (missing key → 401)
         run: |
           CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3199/api/systems)
@@ -181,45 +194,11 @@ jobs:
           fi
           echo "  ✓ missing API key → 401"
 
-      - name: End-to-end: create → step → fetch trajectories → delete
+      - name: End-to-end: create → WS subscribe → step (live samples) → delete
         run: |
           set -e
-          H='-H X-Api-Key:ci-test -H Content-Type:application/json'
-          # Create a 2-body Kepler system
-          CREATE=$(curl -s -H 'X-Api-Key: ci-test' -H 'Content-Type: application/json' \
-            -d '{"name":"ci-test","dt":0.001,"softening":1e-6,"bodies":[{"mass":1,"x":0,"y":0,"z":0,"vx":0,"vy":0,"vz":0},{"mass":0.001,"x":1,"y":0,"z":0,"vx":0,"vy":1,"vz":0}]}' \
-            http://localhost:3199/api/systems)
-          echo "  create: $CREATE"
-          ID=$(echo "$CREATE" | python3 -c "import sys, json; print(json.load(sys.stdin)['id'])")
-          # Step 200 steps
-          STEP=$(curl -s -X POST -H 'X-Api-Key: ci-test' -H 'Content-Type: application/json' \
-            -d '{"steps":200,"sampleEvery":20}' http://localhost:3199/api/systems/$ID/step)
-          echo "  step: $STEP"
-          echo "$STEP" | python3 -c "
-          import sys, json
-          d = json.load(sys.stdin)
-          drift = float(d['drift'])
-          assert drift < 1e-6, 'drift too high: ' + str(drift)
-          print('  ✓ drift < 1e-6 (got ' + str(drift) + ')')
-          "
-          # Fetch trajectories
-          TRAJ=$(curl -s -H 'X-Api-Key: ci-test' http://localhost:3199/api/systems/$ID/trajectories)
-          N_TRAJ=$(echo "$TRAJ" | python3 -c "import sys, json; print(len(json.load(sys.stdin)['trajectories']))")
-          echo "  trajectories: $N_TRAJ samples"
-          if [ "$N_TRAJ" -lt 10 ]; then
-            echo "Expected >=10 trajectory samples, got $N_TRAJ"
-            exit 1
-          fi
-          # Delete
-          DEL=$(curl -s -X DELETE -H 'X-Api-Key: ci-test' http://localhost:3199/api/systems/$ID)
-          echo "  delete: $DEL"
-          # Confirm gone
-          CODE=$(curl -s -o /dev/null -w "%{http_code}" -H 'X-Api-Key: ci-test' http://localhost:3199/api/systems/$ID)
-          if [ "$CODE" != "404" ]; then
-            echo "Expected 404 after delete, got $CODE"
-            exit 1
-          fi
-          echo "  ✓ end-to-end roundtrip complete"
+          node scripts/e2e-test.js
+          echo "  ✓ end-to-end roundtrip + WebSocket streaming complete"
 
       - name: Stop server
         if: always()

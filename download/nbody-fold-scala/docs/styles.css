@@ -3,8 +3,8 @@
    ============================================================================ */
 
 :root {
-  --bg: #0d1117;
-  --panel: #161b22;
+  --bg: #000000;          /* Phase 14: pure black per user feedback (space = black) */
+  --panel: #0d1117;       /* panels keep their slight tint so UI chrome separates from canvas */
   --border: #30363d;
   --text: #c9d1d9;
   --text-dim: #8b949e;
@@ -33,7 +33,7 @@ body {
   justify-content: space-between;
   align-items: center;
   padding: 12px 20px;
-  background: linear-gradient(180deg, #161b22 0%, #0d1117 100%);
+  background: linear-gradient(180deg, #0d1117 0%, #000000 100%);
   border-bottom: 1px solid var(--border);
 }
 
@@ -172,15 +172,50 @@ td button { padding: 4px 8px; font-size: 11px; }
   gap: 8px;
 }
 canvas {
-  background: #010409;
+  background: #000000;  /* Phase 14: pure black — space is black */
   border: 1px solid var(--border);
   border-radius: 4px;
   width: 100%;
   height: auto;
+  cursor: grab;
+}
+canvas:active { cursor: grabbing; }
+
+/* ── 2D / 3D toggle ───────────────────────────────────────────────── */
+.viz-toggle {
+  float: right;
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-left: 12px;
+}
+.viz-toggle button {
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-family: var(--mono);
+  cursor: pointer;
+  border-radius: 0;
+  transition: all 0.15s ease;
+}
+.viz-toggle button:hover { color: var(--text); }
+.viz-toggle button.active {
+  background: var(--accent);
+  color: #000;
+}
+
+.hint {
+  margin: 8px 0 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
 }
 
 #audit-log {
-  background: #010409;
+  background: #000000;
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 10px;

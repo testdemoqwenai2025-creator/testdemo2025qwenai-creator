@@ -1803,3 +1803,57 @@ Phase 14 improvement suggestions (forward-looking):
 5. Prometheus metrics endpoint — /metrics emits request_count, request_latency_seconds, drift_gauge, system_count for real Grafana dashboards.
 6. JWT auth + multi-tenant — replace shared NBODY_API_KEY with JWT-issued per-user tokens. Add User + Session tables. Each user sees only their own simulations.
 7. Phase 9/10 JIT warmup fix — add a pre-main warmup loop in Phase9Demo/Phase10Demo that runs ~100 steps of a small system before timing, so CI runners with cold JITs produce stable numbers. Removes the continue-on-error escape hatch.
+
+---
+Task ID: 16
+Agent: main (autonomous Phase 14 per user request)
+Task: Phase 14 — 3D visualization + WebSocket streaming + Prometheus metrics. User feedback this round: (a) the 2D trajectory viz should "pop out" as a 3D layer for better UX; (b) the colour changes are good but the background should be pure black to reflect the space scenario. Plus the previously-suggested Phase 14 items: WebSocket streaming, /metrics endpoint, smoke-test additions.
+
+Work Log:
+- Read user feedback carefully: 3D pop-out + pure black bg are the explicit asks. Decided to ALSO include WebSocket streaming and /metrics since "proceed with phase 14" was the directive and these were on the Phase 14 candidate list from the prior round's worklog.
+- Created docs/viz3d.js (188 LOC): hand-rolled 3D engine on the 2D canvas. Vec3 ops (add/sub/scale/dot/cross/len/norm), rotation matrices (rotX/rotY/rotZ), Camera class (yaw/pitch/dist/focal), perspective projection with z>0 culling, Renderer class with mouse-drag yaw/pitch, wheel zoom, auto-rotate (0.003 rad/frame when not dragging), 180-star background field (deterministic seed via NBodyPhysics.mulberry32), gradient trajectory (green→red temperature), body glow (radial gradient + white core). No Three.js, no WebGL, no deps.
+- Updated docs/index.html: added 2D/3D toggle buttons in the canvas panel header, increased canvas size to 800×420 (was 640×320) to give 3D more room, added <script src="viz3d.js"> before app.js, added #viz-hint paragraph for mode-specific guidance.
+- Updated docs/styles.css: pure black --bg (#000000, was #0d1117), pure black canvas bg, pure black audit-log bg, topbar gradient fades from #0d1117 to #000000. Added .viz-toggle button group styling (transparent buttons that turn accent-blue when active) and .hint text styling. Kept --panel at #0d1117 so panels separate visually from the pure-black canvas.
+- Updated docs/app.js: refactored renderTrajectory into renderTrajectory2D (original XY projection) and renderTrajectory3D (Viz3D.Renderer with animation loop). Added setVizMode(mode3D) that flips the toggle UI and re-renders. Added openLiveStream(id) that opens a native WebSocket to <backend>/api/systems/:id/stream (DYNAMIC mode only) before the POST /step call. The WS onmessage handler appends received samples to _currentTrajectory and re-renders in real time. Initial empty render on page load so the canvas doesn't show browser default.
+- Updated server/server.js with three additions:
+  * Hand-rolled WebSocket (~80 LOC): wsAcceptKey (SHA-1+base64 of client key + RFC 6455 magic GUID), wsEncodeText (server→client unmasked text frame with 7/16/64-bit length encoding), wsDecodeFrame (client→server masked frame decoder), attachWebSocket (binds data handler that decodes frames, auto-responds to ping with pong, closes on opcode 8). Uses only Node's `crypto` and `Buffer` — no `ws` npm package.
+  * server.on('upgrade', ...) handler: validates /api/systems/:id/stream path, checks X-Api-Key auth, validates Sec-WebSocket-Key header, sends 101 Switching Protocols with Sec-WebSocket-Accept, registers socket in wsSubscribers Map<systemId, Set<socket>>, sends 'subscribed' ack, cleans up on close/error.
+  * handleStepSystem now broadcasts {type:'start',...} before the loop, {type:'sample', sample:{step,x,y,z,vx,vy,vz,energy}} for each sampled step, {type:'done', drift, step, energy0, energyFinal, sampled} on completion. This means any client subscribed to that systemId sees samples arrive in real time as the integrator computes them.
+  * /api/metrics endpoint: Prometheus exposition format text with 12 metrics (nbody_requests_total counter, nbody_uptime_seconds gauge, nbody_systems_count gauge, nbody_bodies_count gauge, nbody_trajectories_count gauge, nbody_request_latency_avg_ms gauge, nbody_ws_connections_open gauge, nbody_ws_connections_total counter, nbody_drift_last gauge, nbody_drift_avg gauge, nbody_requests_by_status{status} counter, nbody_requests_by_method{method} counter). All gauges have # HELP and # TYPE comments.
+  * recordRequest(method, pathname, status, ms) wired into the HTTP response wrappers. recordDrift(drift) called from handleStepSystem. Both update the metrics counters.
+- Updated scripts/smoke-test.js: added section 6 "3D engine math (viz3d.js — Phase 14)" with 7 new assertions: vAdd, vDot, vCross (x̂×ŷ=ẑ), rotY by π/2, perspective projection of origin (canvas center), behind-camera culling (null), yaw=π/2 rotates world X out of view. Total: 21/21 PASS (was 14/14).
+- Created scripts/e2e-test.js (180 LOC): Phase 14 integration test. Verifies /api/health + /api/metrics + auth + creates a system + opens a WebSocket to /api/systems/:id/stream via raw net.Socket (does the RFC 6455 handshake manually with Sec-WebSocket-Key + X-Api-Key headers) + triggers POST /step on a separate HTTP connection + asserts the WS receives subscribed → start → 10× sample → done (13 messages total) + verifies /api/metrics shows nbody_drift_last and nbody_drift_avg after the step + deletes the system + confirms 404. Includes debug logging (every WS message printed with type + step number) so failures are easy to diagnose.
+- Updated .github/workflows/ci.yml: added /api/metrics format check (Phase 14) as a separate step in the dynamic-server job. Replaced the bash end-to-end with `node scripts/e2e-test.js` since the e2e test exercises WebSocket streaming which the bash version couldn't.
+- Updated README.md: bumped status badge to "Phases 0-14", added Phase 14 row to the status table, added "Phase 14 — 3D Visualization + WebSocket Streaming + Metrics" section with three subsections (3D engine, WebSocket streaming, /metrics endpoint) including a 12-row metrics table, updated directory layout to include docs/viz3d.js and scripts/e2e-test.js.
+- Updated download/skills.md: appended Section 11 "Phase 14: 3D Visualization + WebSocket Streaming + Metrics" (130 lines) documenting goal, deliverables, verification (actual smoke + e2e test output), 5 design choices (why hand-roll 3D, why hand-roll WS, why pure black, why 2D/3D toggle, why Prometheus text format), standing-directive compliance, and 6 Phase 15 candidates.
+
+Verification (all passing):
+- node scripts/smoke-test.js → 21/21 PASS (added 7 3D-math assertions)
+- node scripts/e2e-test.js (with server on 3197) → ALL PASS:
+  * /api/health → 200 ok
+  * /api/metrics → 200 (1676 bytes, Prometheus format with HELP/TYPE labels)
+  * POST /api/systems → 201 id=1
+  * WebSocket handshake → 101 Switching Protocols
+  * WS received 13 messages: subscribed, start, 10× sample (step=10..100), done
+  * POST /step → 200 drift=2.4938818371536514e-12 (excellent — symplectic KDK faithful)
+  * /api/metrics post-step: nbody_drift_last + nbody_drift_avg populated
+  * DELETE /api/systems/1 → 200 {deleted:1}
+- All docs/*.js + server/server.js pass `node --check` (no syntax errors)
+- No deprecation warnings (WHATWG URL API used throughout)
+
+Stage Summary:
+- Phase 14 complete: 3 new files (docs/viz3d.js 188 LOC, scripts/e2e-test.js 180 LOC, + minor additions across 5 existing files). Total ~600 LOC of new code, zero new dependencies.
+- 3D visualization works in the browser: mouse-drag rotates, wheel zooms, auto-rotates when idle, star field + gradient trajectory + body glow. Pure black canvas background per user feedback. 2D/3D toggle preserves the original XY projection for users who want it.
+- WebSocket live streaming verified end-to-end: server broadcasts 13 messages per step call (subscribed + start + 10 samples + done), client renders each sample as it arrives. Drift 2.5e-12 over 100 steps confirms physics faithful.
+- /metrics endpoint serves Prometheus-format text with 12 metrics. Ready for Grafana dashboard consumption.
+- CI workflow updated: dynamic-server job now runs the e2e test (which exercises WS streaming + /metrics) instead of the bash one-liner.
+- Standing directives satisfied: (1) skills.md updated, (2) GitHub push next, (3) frontend-visible demo output — 3D toggle, star field, gradient trajectory, live WS streaming all visible in the demo UI, (4) improvement suggestions below.
+
+Phase 15 improvement suggestions (forward-looking):
+1. Barnes-Hut on the server — port the Scala Phase 9 solver to JS so the dynamic backend handles N>2000 in reasonable time. Currently O(N²) brute force.
+2. Multi-body trajectory persistence — currently only the first body's trajectory is sampled (matching Scala Phase 12). Add /api/systems/:id/trajectories/all returning all bodies' trajectories, with server-side downsampling.
+3. JWT auth + multi-tenant — replace shared NBODY_API_KEY with JWT-issued per-user tokens. Add User + Session tables. Each user sees only their own simulations.
+4. Phase 9/10 JIT warmup fix — add a pre-main warmup loop in Phase9Demo/Phase10Demo that runs ~100 steps of a small system before timing. Removes the continue-on-error escape hatch from CI.
+5. Grafana dashboard JSON — ship docs/grafana-dashboard.json that consumes the /api/metrics endpoint. Ready-to-import for operators.
+6. 3D camera state in URL hash — store yaw/pitch/dist in the URL hash so users can share a specific 3D view via deep link.
+7. WebGL renderer for very large N — if Phase 15 adds Barnes-Hut and N>10k becomes feasible, switch to WebGL points + lines for rendering (would still stay zero-dep by writing raw GLSL shaders, ~300 LOC, but trades complexity for throughput).
