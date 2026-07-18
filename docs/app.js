@@ -368,7 +368,7 @@
     if (_animationStop) { _animationStop(); _animationStop = null; }
     const c = document.getElementById('traj-canvas');
     const ctx = c.getContext('2d');
-    // Phase 14: pure black background per user feedback
+    // Phase 18: pure black background per user feedback
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, c.width, c.height);
 
@@ -401,13 +401,26 @@
     const ox = pad - minX * s + (c.width - 2 * pad - rangeX * s) / 2;
     const oy = pad + maxY * s + (c.height - 2 * pad - rangeY * s) / 2;
 
+    // ── Phase 18: ADDITIVE BLENDING for the neon "pop" ────────────────
+    // Switching to 'lighter' makes overlapping trail segments and glow
+    // halos add their RGB values, so colors brighten into white where they
+    // stack — this is the classic demo-scene look that makes trajectories
+    // glow against pure black. We restore 'source-over' before drawing
+    // the solid white core dots so they stay crisp.
+    ctx.globalCompositeOperation = 'lighter';
+
     // Draw each body's trajectory in its own color (matching the 3D engine's wheel)
     for (const g of byBody) {
       const rows = g.samples;
       if (rows.length < 1) continue;
       const hue = (g.bodyId * 137.508) % 360;
-      ctx.strokeStyle = 'hsl(' + hue + ',80%,60%)';
-      ctx.lineWidth = 1.5;
+      const stroke = 'hsl(' + hue + ',90%,65%)';
+
+      // Pass 1: faint wide halo (the "bloom" underlay)
+      ctx.strokeStyle = 'hsla(' + hue + ',90%,55%,0.18)';
+      ctx.lineWidth = 6;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
       ctx.beginPath();
       for (let i = 0; i < rows.length; i++) {
         const px = rows[i].x * s + ox;
@@ -415,20 +428,52 @@
         if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
       }
       ctx.stroke();
-      // Mark current position with a glowing dot
+
+      // Pass 2: bright core stroke
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 1.8;
+      ctx.beginPath();
+      for (let i = 0; i < rows.length; i++) {
+        const px = rows[i].x * s + ox;
+        const py = oy - rows[i].y * s;
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+
+      // Mark current position with a larger, layered glow that pops
       const last = rows[rows.length - 1];
       const px = last.x * s + ox;
       const py = oy - last.y * s;
-      const grad = ctx.createRadialGradient(px, py, 0, px, py, 8);
-      grad.addColorStop(0, 'hsla(' + hue + ',80%,60%,0.9)');
-      grad.addColorStop(1, 'hsla(' + hue + ',80%,60%,0)');
-      ctx.fillStyle = grad;
+      // Outer bloom (wide, low alpha)
+      const bloom = ctx.createRadialGradient(px, py, 0, px, py, 22);
+      bloom.addColorStop(0,   'hsla(' + hue + ',90%,70%,0.55)');
+      bloom.addColorStop(0.4, 'hsla(' + hue + ',90%,60%,0.18)');
+      bloom.addColorStop(1,   'hsla(' + hue + ',90%,60%,0)');
+      ctx.fillStyle = bloom;
       ctx.beginPath();
-      ctx.arc(px, py, 8, 0, Math.PI * 2);
+      ctx.arc(px, py, 22, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = '#fff';
+      // Mid glow
+      const mid = ctx.createRadialGradient(px, py, 0, px, py, 9);
+      mid.addColorStop(0, 'hsla(' + hue + ',95%,80%,0.95)');
+      mid.addColorStop(1, 'hsla(' + hue + ',95%,70%,0)');
+      ctx.fillStyle = mid;
       ctx.beginPath();
-      ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+      ctx.arc(px, py, 9, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // ── Pass 3: solid white cores (drawn with normal blending so they stay crisp)
+    ctx.globalCompositeOperation = 'source-over';
+    for (const g of byBody) {
+      const rows = g.samples;
+      if (rows.length < 1) continue;
+      const last = rows[rows.length - 1];
+      const px = last.x * s + ox;
+      const py = oy - last.y * s;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(px, py, 2.8, 0, Math.PI * 2);
       ctx.fill();
     }
   }

@@ -271,13 +271,20 @@
       ctx.fillRect(0, 0, W, H);
 
       // ── Star field (project stars, draw as faint dots) ──────────────────
+      // Phase 18: drawn with normal blending first so they stay subtle.
       for (const s of this.stars) {
         const p = project(s, this.camera, W, H);
         if (!p) continue;
-        const alpha = s.brightness * 0.6;
+        const alpha = s.brightness * 0.55;
         ctx.fillStyle = 'rgba(255,255,255,' + alpha.toFixed(3) + ')';
         ctx.fillRect(p.x, p.y, 1, 1);
       }
+
+      // ── Phase 18: ADDITIVE BLENDING for trails + body glows ─────────────
+      // 'lighter' makes overlapping RGB add up — neon bloom against pure
+      // black, just like the 2D renderer. Stars above are already drawn;
+      // we now switch composite op for everything that should "pop".
+      ctx.globalCompositeOperation = 'lighter';
 
       // ── Multi-body trajectories (Phase 15) ──────────────────────────────
       // Each body's trajectory gets its own color (HSL golden-angle wheel).
@@ -287,16 +294,33 @@
       for (const traj of this.trajectories) {
         const samples = traj.samples;
         if (samples.length < 2) { totalSamples += samples.length; continue; }
-        const baseColor = this.bodyColor(traj.bodyId);
+
+        // Pass 1: faint wide bloom underlay (the "neon halo" behind each trail)
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
         for (let i = 1; i < samples.length; i++) {
           const a = project(samples[i - 1], this.camera, W, H);
           const b = project(samples[i], this.camera, W, H);
           if (!a || !b) continue;
-          // Fade from 0.25 (tail) → 1.0 (head) along the trail
           const t = i / samples.length;
-          const alpha = 0.25 + 0.75 * t;
+          const alpha = 0.10 + 0.20 * t;
           ctx.strokeStyle = this.bodyColor(traj.bodyId, alpha);
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = 5;
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+        }
+
+        // Pass 2: bright core stroke
+        for (let i = 1; i < samples.length; i++) {
+          const a = project(samples[i - 1], this.camera, W, H);
+          const b = project(samples[i], this.camera, W, H);
+          if (!a || !b) continue;
+          const t = i / samples.length;
+          const alpha = 0.30 + 0.70 * t;
+          ctx.strokeStyle = this.bodyColor(traj.bodyId, alpha);
+          ctx.lineWidth = 1.6;
           ctx.beginPath();
           ctx.moveTo(a.x, a.y);
           ctx.lineTo(b.x, b.y);
@@ -306,22 +330,40 @@
       }
 
       // ── Body points (current positions, Phase 15: color per body) ───────
+      // Phase 18: layered glow — outer wide bloom, mid halo, then a crisp
+      // white core (drawn with normal blending so it stays sharp).
       for (let i = 0; i < this.bodies.length; i++) {
         const b = this.bodies[i];
         const p = project(b, this.camera, W, H);
         if (!p) continue;
         const radius = Math.max(1.5, Math.cbrt(Math.max(1e-9, b.mass)) * 3 * (p.scale / 100));
-        const color = this.bodyColor(i);
-        // Outer glow (per-body color)
-        const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius * 2.5);
-        grad.addColorStop(0, this.bodyColor(i, 0.9));
-        grad.addColorStop(0.5, this.bodyColor(i, 0.3));
-        grad.addColorStop(1, this.bodyColor(i, 0));
+        // Outer wide bloom
+        const bloom = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius * 4.5);
+        bloom.addColorStop(0,   this.bodyColor(i, 0.55));
+        bloom.addColorStop(0.4, this.bodyColor(i, 0.18));
+        bloom.addColorStop(1,   this.bodyColor(i, 0));
+        ctx.fillStyle = bloom;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, radius * 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        // Mid glow
+        const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius * 2.2);
+        grad.addColorStop(0,   this.bodyColor(i, 0.95));
+        grad.addColorStop(0.5, this.bodyColor(i, 0.35));
+        grad.addColorStop(1,   this.bodyColor(i, 0));
         ctx.fillStyle = grad;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, radius * 2.5, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, radius * 2.2, 0, Math.PI * 2);
         ctx.fill();
-        // Solid white core
+      }
+
+      // ── Restore normal blending for the crisp white cores + HUD ─────────
+      ctx.globalCompositeOperation = 'source-over';
+      for (let i = 0; i < this.bodies.length; i++) {
+        const b = this.bodies[i];
+        const p = project(b, this.camera, W, H);
+        if (!p) continue;
+        const radius = Math.max(1.5, Math.cbrt(Math.max(1e-9, b.mass)) * 3 * (p.scale / 100));
         ctx.fillStyle = '#ffffff';
         ctx.beginPath();
         ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);

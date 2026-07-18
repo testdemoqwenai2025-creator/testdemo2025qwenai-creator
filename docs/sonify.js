@@ -25,8 +25,16 @@
   const AUDIO_CTX_CTOR = window.AudioContext || window.webkitAudioContext;
   if (!AUDIO_CTX_CTOR) {
     // Browser without Web Audio — provide a no-op stub so the rest of the
-    // app keeps working.
-    window.NBodySonify = { enabled: false, resume() {}, start() {}, stop() {}, update() {}, ping() {} };
+    // app keeps working. The stub mirrors the full public API surface so
+    // tour.js / app.js can call setEnabled/isEnabled without crashing.
+    window.NBodySonify = {
+      enabled: false,
+      _enabled: false,
+      isEnabled() { return false; },
+      setEnabled() {},
+      resume() { return Promise.resolve(); },
+      start() {}, stop() {}, update() {}, ping() {}
+    };
     return;
   }
 
