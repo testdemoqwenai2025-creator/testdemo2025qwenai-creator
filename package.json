@@ -9,7 +9,9 @@
     "lint": "eslint .",
     "postinstall": "prisma generate",
     "db:push": "prisma db push",
+    "db:push:dev": "prisma db push --schema=prisma/schema.dev.prisma",
     "db:generate": "prisma generate",
+    "db:generate:dev": "prisma generate --schema=prisma/schema.dev.prisma",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
     "smoke-test": "node scripts/smoke-test.js"

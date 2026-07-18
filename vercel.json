@@ -6,8 +6,5 @@
   "regions": ["iad1"],
   "github": {
     "silent": false
-  },
-  "env": {
-    "DATABASE_PROVIDER": "postgresql"
   }
 }

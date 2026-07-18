@@ -1715,3 +1715,35 @@ Phase 14 improvement suggestions (forward-looking):
 5. Observable CI badge on the live demo — fetch the GitHub Actions status JSON and show a green/red CI badge in the docs/index.html header.
 6. Phase 14 — Observability tier — /metrics (Prometheus), /healthz (k8s liveness), /readyz (k8s readiness). Real Grafana dashboard JSON in docs/.
 7. Phase 15 — Real-time collaboration — Y.js or Automerge for shared simulation editing. Multiple users see the same cursor + can step the same simulation simultaneously.
+
+---
+Task ID: 15b
+Agent: main (autonomous CI fix)
+Task: Fix Phase 13 CI failures — smoke-test.js hardcoded path + Prisma provider=env() not supported.
+
+Work Log:
+- First CI run (commit c538d8d) revealed two failures:
+  1. Static demo job: smoke-test.js failed with ENOENT because DOCS path was hardcoded to /home/z/my-project/docs/ — doesn't exist on GitHub runners (which use /home/runner/work/...).
+  2. Next.js job: setup-node failed because 'cache: npm' directive requires package-lock.json, but repo has bun.lock.
+- First fix commit (d1a9764): switched smoke-test.js to path.resolve(__dirname, '..', 'docs') and removed cache directive + bumped Node 20→22 (Node 20 deprecated on GitHub Actions as of Sept 2025).
+- Second CI run (d1a9764): Static demo job PASSED, Scala job PASSED, but Next.js job STILL FAILED with new error: "Prisma schema validation - A datasource must not use the env() function in the provider argument."
+- Root cause: Prisma CLI does NOT support provider = env("...") — only the url can use env(). This is a Prisma limitation, not a bug in our schema. The env-driven provider switch I designed in Task ID 15 was fundamentally invalid.
+- Solution: split into two schema files:
+  * prisma/schema.prisma — provider = "postgresql" (production default; Vercel + Neon)
+  * prisma/schema.dev.prisma — provider = "sqlite" (local dev; zero-config)
+  Both files have identical model definitions — only the datasource block differs.
+- Updated prisma/schema.prisma header comment to explain the two-file approach and document the npm scripts for switching between them.
+- Created prisma/schema.dev.prisma as a copy of schema.prisma with provider swapped to "sqlite" and the header comment block rewritten to describe the dev workflow.
+- Updated package.json: added db:push:dev and db:generate:dev scripts that pass --schema=prisma/schema.dev.prisma. Existing db:push and db:generate scripts unchanged (use default schema.prisma = postgres).
+- Updated .github/workflows/ci.yml Next.js job: switched from DATABASE_PROVIDER env var to using --schema=prisma/schema.dev.prisma explicitly for both prisma generate and prisma db push. Added a new "Validate production schema" step that runs npx prisma validate --schema=prisma/schema.prisma to ensure the postgres schema is at least syntactically valid (can't fully test without a real Postgres instance, but prisma validate catches schema-level errors).
+- Updated vercel.json: removed the env.DATABASE_PROVIDER default (no longer needed).
+- Updated .env and .env.example: removed DATABASE_PROVIDER references; clarified that local dev uses schema.dev.prisma (sqlite) and production uses schema.prisma (postgres).
+- Updated README.md: removed DATABASE_PROVIDER from the Vercel deploy button env list.
+- Updated docs/deploy-guide.md: removed DATABASE_PROVIDER from the Vercel step description and the troubleshooting table; added a new troubleshooting row for "Local dev can't connect" pointing users to the right schema file.
+- Verified locally: node scripts/smoke-test.js → 5/5 PASS (path fix still good).
+
+Stage Summary:
+- Phase 13 CI now expected to pass on next run: Scala ✅ (already passing), Static demo ✅ (already passing after path fix), Next.js ✅ (now uses dev schema with sqlite — no Postgres needed in CI).
+- Two-schema approach is cleaner than env-driven provider: production schema is the canonical default; local dev requires an explicit --schema flag (or npm run db:push:dev). No magic env vars.
+- Prisma limitation documented in both schema file headers so future contributors don't repeat the mistake.
+- Standing directives preserved: skills.md will need a small follow-up to reflect the two-schema reality (currently describes the env-driven approach which doesn't work).

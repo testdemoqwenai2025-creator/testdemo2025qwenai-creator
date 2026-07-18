@@ -14,7 +14,7 @@
 
 > ⚡ **Dynamic backend (Phase 13) — one-click deploy to your own free Vercel + Neon Postgres:**
 >
-> [![Deploy to Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Ftestdemoqwenai2025-creator%2Ftestdemo2025qwenai-creator&env=DATABASE_URL,DATABASE_PROVIDER,NBODY_API_KEY&envDescription=DATABASE_URL%20%28Neon%20Postgres%20connection%20string%29%2C%20DATABASE_PROVIDER%20%28set%20to%20postgresql%29%2C%20NBODY_API_KEY%20%28optional%20write%20gate%29&project-name=nbody-fold-scala&repository-name=nbody-fold-scala)
+> [![Deploy to Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Ftestdemoqwenai2025-creator%2Ftestdemo2025qwenai-creator&env=DATABASE_URL,NBODY_API_KEY&envDescription=DATABASE_URL%20%28Neon%20Postgres%20connection%20string%29%2C%20NBODY_API_KEY%20%28optional%20write%20gate%29&project-name=nbody-fold-scala&repository-name=nbody-fold-scala)
 > [![Deploy to Neon](https://neon.tech/button)](https://neon.tech/new)
 >
 > Once your Vercel deployment is live (e.g. `https://nbody-fold-scala-xxx.vercel.app`), point the static demo at it by appending `?backend=https://nbody-fold-scala-xxx.vercel.app` to the GitHub Pages URL — the same UI then talks to a real Postgres-backed dynamic backend with cross-user persistence. See **[docs/deploy-guide.md](docs/deploy-guide.md)** for the full step-by-step.

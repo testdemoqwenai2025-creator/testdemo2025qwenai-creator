@@ -74,11 +74,13 @@ jobs:
         run: node scripts/smoke-test.js
 
   # ── Job 3: Next.js control plane build ────────────────────────────────────
+  # Uses the dev schema (SQLite) so the build can run without a Postgres
+  # instance. The production schema (PostgreSQL) is validated separately by
+  # the Vercel deploy step (which has a real DATABASE_URL).
   nextjs-build:
     name: Next.js control plane (npm build)
     runs-on: ubuntu-latest
     env:
-      DATABASE_PROVIDER: sqlite
       DATABASE_URL: 'file:/tmp/test.db'
     steps:
       - uses: actions/checkout@v4
@@ -91,11 +93,14 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
-      - name: Generate Prisma client
-        run: npx prisma generate
+      - name: Generate Prisma client (dev schema — SQLite)
+        run: npx prisma generate --schema=prisma/schema.dev.prisma
 
-      - name: Push schema to test DB
-        run: npx prisma db push
+      - name: Push dev schema to test DB
+        run: npx prisma db push --schema=prisma/schema.dev.prisma
+
+      - name: Validate production schema (PostgreSQL syntax only)
+        run: npx prisma validate --schema=prisma/schema.prisma
 
       - name: Build Next.js app
         run: npm run build

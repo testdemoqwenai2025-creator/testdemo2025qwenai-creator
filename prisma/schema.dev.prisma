@@ -1,5 +1,5 @@
 // ============================================================================
-// schema.prisma — nbody-fold-scala web control plane (PRODUCTION: PostgreSQL)
+// schema.dev.prisma — nbody-fold-scala web control plane (LOCAL DEV: SQLite)
 // ============================================================================
 // Four tables form the data model for the web frontend that drives the
 // N-body simulation:
@@ -15,18 +15,18 @@
 // trail of every API request (auth, latency, status).
 //
 // ── Phase 13: Dynamic Backend Deployment ──────────────────────────────────
-// This is the PRODUCTION schema — PostgreSQL. Vercel + Neon, Render, Railway,
-// Fly.io, Supabase, etc. all use this file by default.
+// This is the LOCAL DEV schema — SQLite (file-based, zero-config).
+// Use this file for local development: `npm run db:push:dev`
 //
-// For LOCAL DEVELOPMENT with SQLite (zero-config, file-based), use
-// `prisma/schema.dev.prisma` instead:
+// For PRODUCTION (PostgreSQL on Vercel + Neon etc.), use
+// `prisma/schema.prisma` instead:
 //
-//   npx prisma db push --schema=prisma/schema.dev.prisma
-//   npx prisma generate --schema=prisma/schema.dev.prisma
+//   npx prisma db push                    # uses schema.prisma (postgres)
+//   npx prisma generate                   # uses schema.prisma (postgres)
 //
 // Or use the npm scripts:
-//   npm run db:push:dev    # pushes schema to local ./dev.db
-//   npm run db:generate:dev
+//   npm run db:push                       # pushes to Postgres (production)
+//   npm run db:generate                   # generates Prisma client (prod)
 //
 // Prisma does not allow `provider = env(...)` (only `url` can use env()), so
 // we maintain two schema files. The model definitions are identical — only
@@ -38,7 +38,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 

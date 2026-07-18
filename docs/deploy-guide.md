@@ -31,14 +31,13 @@ The static demo supports both modes via a single query parameter: `?backend=<URL
 
 Click this button:
 
-[![Deploy to Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Ftestdemoqwenai2025-creator%2Ftestdemo2025qwenai-creator&env=DATABASE_URL,DATABASE_PROVIDER,NBODY_API_KEY&envDescription=DATABASE_URL%20%28Neon%20Postgres%20connection%20string%29%2C%20DATABASE_PROVIDER%20%28set%20to%20postgresql%29%2C%20NBODY_API_KEY%20%28optional%20write%20gate%29&project-name=nbody-fold-scala&repository-name=nbody-fold-scala)
+[![Deploy to Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Ftestdemoqwenai2025-creator%2Ftestdemo2025qwenai-creator&env=DATABASE_URL,NBODY_API_KEY&envDescription=DATABASE_URL%20%28Neon%20Postgres%20connection%20string%29%2C%20NBODY_API_KEY%20%28optional%20write%20gate%29&project-name=nbody-fold-scala&repository-name=nbody-fold-scala)
 
 What happens:
 1. Vercel clones the repo into a new GitHub repository under your account.
-2. Vercel auto-detects Next.js, installs dependencies, runs `prisma generate` (via the `postinstall` hook in `package.json`), and builds.
-3. Vercel prompts you to set three environment variables:
+2. Vercel auto-detects Next.js, installs dependencies, runs `prisma generate` (via the `postinstall` hook in `package.json` — uses `prisma/schema.prisma` which is PostgreSQL), and builds.
+3. Vercel prompts you to set two environment variables:
    - `DATABASE_URL` — your Neon Postgres connection string (get it from Step 2 below)
-   - `DATABASE_PROVIDER` — set to `postgresql`
    - `NBODY_API_KEY` — (optional) any secret string; if set, write endpoints require it as the `x-api-key` header
 4. Vercel deploys and gives you a URL like `https://nbody-fold-scala-xxx.vercel.app`.
 
@@ -163,11 +162,12 @@ If all four return JSON, your dynamic backend is fully operational. Point the st
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `PrismaClientInitializationError: Can't reach database server` | Wrong `DATABASE_URL` or network egress blocked | Verify connection string in Neon dashboard; check Vercel function logs |
-| `Environment variable not found: DATABASE_PROVIDER` | Env var not set in Vercel | Vercel dashboard → Settings → Environment Variables → add `DATABASE_PROVIDER=postgresql` |
-| Tables don't exist after deploy | `prisma db push` never ran | Run `npx prisma db push` locally with the same `DATABASE_URL` |
+| `Environment variable not found: DATABASE_URL` | Env var not set in Vercel | Vercel dashboard → Settings → Environment Variables → add `DATABASE_URL` (Neon connection string) |
+| Tables don't exist after deploy | `prisma db push` never ran | Run `npx prisma db push` locally with the same `DATABASE_URL` (uses `prisma/schema.prisma` = postgres) |
 | Static demo shows `DYNAMIC MODE` badge but requests fail (CORS) | Vercel CORS not configured | The Next.js middleware already sets `Access-Control-Allow-*: *`; check Vercel logs for the actual error |
 | `x-api-key` rejected | `NBODY_API_KEY` set in Vercel but not in static demo | Type the same key into the API Key field — it's persisted in localStorage |
 | Build fails on Vercel with `prisma generate` error | Missing `postinstall` hook | Already fixed in `package.json` (`"postinstall": "prisma generate"`). If you forked an older version, add it manually. |
+| Local dev can't connect | Using wrong schema file | Local dev: `npm run db:push:dev` (uses `schema.dev.prisma` = sqlite). Production: `npx prisma db push` (uses `schema.prisma` = postgres). |
 
 ---
 
