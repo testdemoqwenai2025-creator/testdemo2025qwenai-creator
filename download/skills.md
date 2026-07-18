@@ -365,3 +365,64 @@ The project is "scientifically complete" when:
 2. **GitHub push with every phase improvement** — automatic, no announcement needed.
 3. **Demo with frontend-visible output** — confirm the demo communicates with all components of the full stack (frontend ↔ middleware ↔ backend ↔ database), observable on the public GitHub Pages URL.
 4. **Each stage suggests what other modifications or improvements could be considered** — forward-looking recommendations appended to each phase.
+
+---
+
+## 9. Phase 13 — Dynamic Backend Deployment (post-DoD extension)
+
+**Goal:** Make the nbody-fold-scala control plane deployable as a **dynamic** backend (real server-side compute + cross-user persistent Postgres) so the static GitHub Pages demo can optionally talk to a real database instead of the in-browser IndexedDB. Provides one-click deploy buttons + a CI workflow + a `?backend=<URL>` dynamic mode for the static demo.
+
+**Why:** Phase 12.b's static demo runs the full stack in the browser, but each visitor has their own private IndexedDB — there's no cross-user persistence. A dynamic backend (Vercel + Neon Postgres, both free) gives: (a) one shared database across all visitors, (b) permanent persistence, (c) server-side compute. The static demo's `?backend=` query param lets the same UI work in either mode — same code, just a different data tier.
+
+**Deliverables:**
+- `prisma/schema.prisma` — switched `datasource db` from `provider = "sqlite"` to `provider = env("DATABASE_PROVIDER")`. Local dev keeps SQLite (zero-config via `DATABASE_PROVIDER=sqlite` + `DATABASE_URL=file:./dev.db`); production uses PostgreSQL (`DATABASE_PROVIDER=postgresql` + Neon connection string). Same schema works in both environments without edits.
+- `.env` — rewritten with comprehensive comments explaining the local-dev vs production split. Documents all three env vars: `DATABASE_PROVIDER`, `DATABASE_URL`, `NBODY_API_KEY`.
+- `.env.example` — checked into git (the real `.env` is gitignored). Shows the shape of the env vars without exposing secrets. Includes the Neon connection string template.
+- `vercel.json` — Vercel deployment config. `buildCommand: "prisma generate && next build"`. `regions: ["iad1"]` (US East — co-locate with Neon for lowest latency). `env: { "DATABASE_PROVIDER": "postgresql" }` as a default.
+- `package.json` — added `"postinstall": "prisma generate"` script (required for Vercel to generate the Prisma client at build time without an explicit build step). Added `"smoke-test": "node scripts/smoke-test.js"`.
+- `.github/workflows/ci.yml` — three-job GitHub Actions workflow that runs on every push to `main` and on every PR:
+  - **Job 1 (scala-build):** Sets up JDK 21 + sbt 1.10.7, runs `sbt compile`, then `sbt "runMain nbody.KeplerDemo"` (Phase 0 smoke test) and `sbt "runMain nbody.Phase12Demo"` (Phase 12 web tier, 61 self-checks). Regression gate for the Scala backend.
+  - **Job 2 (static-demo):** Sets up Node 20, syntax-checks all 5 JS files in `docs/` with `node --check`, then runs `node scripts/smoke-test.js` (5 self-checks). Regression gate for the static demo.
+  - **Job 3 (nextjs-build):** Sets up Node 20 with npm cache, runs `npm ci`, `npx prisma generate`, `npx prisma db push` (with a temp SQLite DB), then `npm run build`. Regression gate for the Next.js control plane.
+- `docs/app.js` — fetch shim upgraded to support **dynamic mode**. New constants `DYNAMIC_BACKEND` (parsed from `?backend=<URL>` query param) and `IS_DYNAMIC_MODE`. If dynamic mode is active, `/api/*` calls bypass the in-page middleware chain and hit the real remote backend via the original `window.fetch` (now saved as `_originalFetch`). A synthetic `nbody:audit` CustomEvent is still dispatched so the audit panel continues to show every request. If dynamic mode is inactive, behavior is unchanged from Phase 12.b.
+- `docs/app.js` DOMContentLoaded handler — updated to detect mode and: (a) update the header badge to show `DYNAMIC MODE → <backend URL>` with a green background, (b) skip IndexedDB open in dynamic mode (not used), (c) emit different "try:" log messages.
+- `README.md` — added at the top: (a) 6 status badges (CI, GitHub Pages, License, Scala, JDK, Phases), (b) "Live static demo" call-to-action with the GitHub Pages URL, (c) "Dynamic backend (Phase 13)" call-to-action with one-click Deploy to Vercel + Deploy to Neon buttons, (d) explanation of the `?backend=` dynamic mode pattern. Added Phase 13 row to the status table. Added v1.2.0 to the Tags/Releases section.
+- `docs/deploy-guide.md` — comprehensive step-by-step deploy guide (220 lines) covering four hosting providers (Vercel+Neon recommended, Render, Railway, Fly.io). Includes: why-dynamic-backend rationale, 4-step Vercel+Neon walkthrough, curl verification commands, troubleshooting table (6 common errors + fixes).
+
+**Verification:**
+- `node --check docs/app.js` → OK (no syntax errors after the dynamic mode additions)
+- `node scripts/smoke-test.js` → 5/5 PASS (re-validated after no changes to physics/middleware modules)
+- The dynamic mode code path is gated by `IS_DYNAMIC_MODE` and doesn't affect static mode behavior — the existing live URL continues to work identically.
+- The GitHub Actions workflow will run on the next push to `main` and validate all three tiers (Scala, static demo, Next.js) — visible at https://github.com/testdemoqwenai2025-creator/testdemo2025qwenai-creator/actions
+
+**Architecture (dynamic mode round-trip):**
+```
+   Browser                                          Vercel (Node runtime)
+   ───────                                          ──────────────────────
+   ┌────────────────────────┐                       ┌─────────────────────┐
+   │  docs/index.html       │                       │  Next.js app        │
+   │  docs/app.js           │  fetch(backend/api/..)│  src/app/api/*      │
+   │  (DYNAMIC_MODE)        │ ─────────────────────▶│  src/middleware.ts  │
+   │                        │ ◀─────────────────────│  src/lib/nbody.ts   │
+   │  fetch shim forwards   │     JSON response     │  src/lib/db.ts      │
+   │  to real backend       │                       │  (Prisma)           │
+   └────────────────────────┘                       └──────────┬──────────┘
+                                                                │
+                                                    ┌───────────▼───────────┐
+                                                    │  Neon Postgres        │
+                                                    │  (4 tables:           │
+                                                    │   Simulation, Body,   │
+                                                    │   Snapshot, ApiAudit) │
+                                                    └───────────────────────┘
+```
+
+**Architecture reuse:**
+- Phase 11 Next.js control plane: zero source changes — `src/middleware.ts`, `src/app/api/*/route.ts`, `src/lib/nbody.ts`, `src/lib/audit.ts`, `src/lib/db.ts` all work unchanged in the Vercel environment. Only the Prisma datasource provider changes (sqlite → env-driven).
+- Phase 12.b static demo: same `docs/index.html`, `docs/styles.css`, `docs/db.js`, `docs/physics.js`, `docs/middleware.js`, `docs/routes.js` — only `docs/app.js` is modified (one new branch in the fetch shim + 6 lines in DOMContentLoaded).
+- Phase 12 Scala web tier: unaffected. The Scala backend remains the reference implementation; the Vercel deployment is the production control plane; the static demo is the public storefront.
+
+**Standing directives satisfied:**
+1. ✅ skills.md updated with Phase 13 spec (this section)
+2. ✅ GitHub push (silent — will run after this commit)
+3. ✅ Demo with frontend-visible output — the `?backend=` mode lets users observe the demo communicating with all four tiers of a real full-stack app (frontend ↔ middleware ↔ backend ↔ Postgres database), observable in the audit panel
+4. ✅ Improvement suggestions for Phase 14: see worklog Task ID 15

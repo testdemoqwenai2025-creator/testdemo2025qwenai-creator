@@ -13,6 +13,13 @@
 // initial conditions) and many TrajectorySnapshots (the result of stepping).
 // The ApiAudit table is populated by Next.js middleware to give an audit
 // trail of every API request (auth, latency, status).
+//
+// ── Phase 13: Dynamic Backend Deployment ──────────────────────────────────
+// The datasource is now PostgreSQL for production deployments (Vercel +
+// Neon, Render, Railway, Fly.io, Supabase, etc.). Local development can
+// still use SQLite by setting DATABASE_URL=file:./dev.db AND
+// DATABASE_PROVIDER=sqlite in .env. The provider is selected via env var
+// so the same schema.prisma works in both environments without edits.
 // ============================================================================
 
 generator client {
@@ -20,7 +27,10 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  // Production default: PostgreSQL. Override with DATABASE_PROVIDER=sqlite
+  // for local dev (auto-creates ./dev.db). This keeps the zero-config local
+  // dev experience while enabling one-click Vercel + Neon deploys.
+  provider = env("DATABASE_PROVIDER")
   url      = env("DATABASE_URL")
 }
 

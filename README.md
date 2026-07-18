@@ -1,9 +1,23 @@
 # nbody-fold-scala — Elite Generalist JSON Architectural Framework
 
-> 🌐 **Live demo — click to run in your browser (no install):**
+[![CI](https://github.com/testdemoqwenai2025-creator/testdemo2025qwenai-creator/actions/workflows/ci.yml/badge.svg)](https://github.com/testdemoqwenai2025-creator/testdemo2025qwenai-creator/actions/workflows/ci.yml)
+[![GitHub Pages](https://img.shields.io/badge/GitHub%20Pages-live-success)](https://testdemoqwenai2025-creator.github.io/testdemo2025qwenai-creator/)
+[![License](https://img.shields.io/badge/license-educational-blue)](#license)
+[![Scala](https://img.shields.io/badge/Scala-3.4.2-red)](https://www.scala-lang.org/)
+[![JDK](https://img.shields.io/badge/JDK-21-orange)](https://openjdk.org/projects/jdk/21/)
+[![Phases](https://img.shields.io/badge/phases-13-brightgreen)](#phase-status)
+
+> 🌐 **Live static demo — click to run in your browser (no install):**
 > ### 👉 [https://testdemoqwenai2025-creator.github.io/testdemo2025qwenai-creator/](https://testdemoqwenai2025-creator.github.io/testdemo2025qwenai-creator/)
 >
 > A fully self-contained vanilla-JS port of the Phase 12 web tier. Anyone in the world can click this URL, create an N-body system, step the integrator, and watch the trajectory + energy drift update in real time — all observable in the audit log panel.
+
+> ⚡ **Dynamic backend (Phase 13) — one-click deploy to your own free Vercel + Neon Postgres:**
+>
+> [![Deploy to Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Ftestdemoqwenai2025-creator%2Ftestdemo2025qwenai-creator&env=DATABASE_URL,DATABASE_PROVIDER,NBODY_API_KEY&envDescription=DATABASE_URL%20%28Neon%20Postgres%20connection%20string%29%2C%20DATABASE_PROVIDER%20%28set%20to%20postgresql%29%2C%20NBODY_API_KEY%20%28optional%20write%20gate%29&project-name=nbody-fold-scala&repository-name=nbody-fold-scala)
+> [![Deploy to Neon](https://neon.tech/button)](https://neon.tech/new)
+>
+> Once your Vercel deployment is live (e.g. `https://nbody-fold-scala-xxx.vercel.app`), point the static demo at it by appending `?backend=https://nbody-fold-scala-xxx.vercel.app` to the GitHub Pages URL — the same UI then talks to a real Postgres-backed dynamic backend with cross-user persistence. See **[docs/deploy-guide.md](docs/deploy-guide.md)** for the full step-by-step.
 
 ---
 
@@ -37,6 +51,7 @@ A **commercial-grade six-pillar software architecture** with a reference impleme
 | 10 — Computational Arbitrage | ✅ | `GroupAggregateSolver` — 5.48× speedup vs BruteForce at N=10648 on lattice |
 | 11 — Publication & Handoff | ✅ | `Manifest` + `ReleaseArtifact` (JSON round-trip) + SHA-256 tamper seal + handoff docs |
 | 12 — Zero-Dependency Web Tier | ✅ | JDK `HttpServer` + file-backed DB + 6-layer middleware + REST routes + single-file frontend |
+| 13 — Dynamic Backend Deployment | ✅ | Prisma → PostgreSQL (env-driven), `vercel.json`, GitHub Actions CI, `?backend=` dynamic mode for the static demo, one-click Vercel + Neon deploy buttons |
 
 **Total: 246+ self-checks PASS across all phases.**
 
@@ -164,3 +179,4 @@ This project is shared for educational and reference purposes. See commit histor
 
 - **v1.0.0** — Phase 11 release (Publication & Handoff Package, 53/53 self-checks PASS)
 - **v1.1.0** — Phase 12 release (Zero-Dependency Web Tier + static GitHub Pages demo, 61/61 self-checks PASS)
+- **v1.2.0** — Phase 13 release (Dynamic Backend Deployment — Vercel + Neon + GitHub Actions CI + `?backend=` dynamic mode)

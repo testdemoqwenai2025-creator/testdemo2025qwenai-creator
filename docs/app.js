@@ -23,7 +23,19 @@
  * ========================================================================== */
 
 // ── fetch() shim ───────────────────────────────────────────────────────────
-// Intercept /api/* calls and route them through the in-page middleware chain.
+// Intercept /api/* calls and route them through one of two paths:
+//
+//   1. DYNAMIC MODE (?backend=https://...): forward to a real remote backend
+//      (e.g. Vercel-hosted Next.js + Neon Postgres). Cross-user persistence.
+//
+//   2. STATIC MODE (default): route through the in-page middleware chain →
+//      IndexedDB. Single-user, browser-local persistence.
+//
+// The mode is selected by the ?backend=<URL> query param. The same static
+// page works identically in both modes — only the data tier changes.
+const DYNAMIC_BACKEND = new URLSearchParams(window.location.search).get('backend');
+const IS_DYNAMIC_MODE = !!DYNAMIC_BACKEND;
+
 const _originalFetch = window.fetch;
 window.fetch = async function (input, init = {}) {
   const url = typeof input === 'string' ? input : input.url;
@@ -44,6 +56,36 @@ window.fetch = async function (input, init = {}) {
     return _originalFetch.call(window, input, init);
   }
 
+  // ── Dynamic mode: forward to the real backend ─────────────────────────
+  if (IS_DYNAMIC_MODE) {
+    // Rewrite "/api/..." → "<backend>/api/..."
+    let fullUrl;
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      fullUrl = url;  // already absolute
+    } else {
+      const base = DYNAMIC_BACKEND.replace(/\/+$/, '');
+      fullUrl = base + (url.startsWith('/') ? url : '/' + url);
+    }
+    // Use the original fetch — hits the real network
+    const res = await _originalFetch.call(window, fullUrl, init);
+    // Emit a synthetic audit event so the UI panel still shows the request
+    const ts = Date.now();
+    const startMs = performance.now();
+    window.dispatchEvent(new CustomEvent('nbody:audit', {
+      detail: {
+        ts,
+        method,
+        path: url.split('?')[0],
+        status: res.status,
+        latencyMs: Math.round(performance.now() - startMs),
+        ipHash: 'remote',
+        apiKey: headers['x-api-key'] ? '****' + (headers['x-api-key'] || '').slice(-4) : '',
+      }
+    }));
+    return res;
+  }
+
+  // ── Static mode: in-page middleware chain → IndexedDB ─────────────────
   const req = window.NBodyMW.makeRequest(method, url, init.body || null, headers);
   const res = await window.NBodyRoutes.fullChain(req);
 
@@ -351,8 +393,21 @@ async function validateSysId() {
 
 // ── Wire up buttons on page load ───────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
-  // Open the DB first
-  await window.NBodyDB.openDB();
+  // ── Mode badge: show whether we're in static or dynamic mode ──────────
+  if (IS_DYNAMIC_MODE) {
+    const badge = document.querySelector('header h1 .badge');
+    if (badge) {
+      badge.textContent = `DYNAMIC MODE → ${DYNAMIC_BACKEND}`;
+      badge.style.background = '#51cf66';
+    }
+    // Skip IndexedDB open in dynamic mode (not used)
+    log(`DYNAMIC MODE: forwarding all /api/* to ${DYNAMIC_BACKEND}`, 'ok');
+    log('cross-user persistence via remote Postgres — requests leave the browser', 'ok');
+  } else {
+    // Open the DB first (static mode only)
+    await window.NBodyDB.openDB();
+    log('STATIC MODE: in-browser middleware → IndexedDB (single-user)', 'ok');
+  }
 
   // Button handlers
   $('btn-create').addEventListener('click', createSystem);
@@ -382,6 +437,9 @@ window.addEventListener('DOMContentLoaded', async () => {
   await pollHealth();
   await validateSysId();
 
-  log('frontend ready — IndexedDB open, middleware chain armed, /api/* routes wired', 'ok');
-  log('try: set any API key → click "Create System" → click "Step Forward"', 'ok');
+  if (IS_DYNAMIC_MODE) {
+    log('try: set API key → Create System → Step Forward (data persists across users)', 'ok');
+  } else {
+    log('try: set any API key → click "Create System" → click "Step Forward"', 'ok');
+  }
 });

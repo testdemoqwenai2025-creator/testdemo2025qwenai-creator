@@ -1,0 +1,104 @@
+# ============================================================================
+# ci.yml — Continuous Integration for nbody-fold-scala
+# ============================================================================
+# Runs on every push to main and on every pull request. Validates:
+#   1. Scala backend compiles (sbt compile) — Phase 0–12 sources
+#   2. Static demo JS smoke-tests pass (node scripts/smoke-test.js)
+#   3. Next.js control plane builds (npm run build) — Phase 11 web layer
+#   4. Lint passes (npm run lint)
+#
+# Status badge: [![CI](https://github.com/testdemoqwenai2025-creator/testdemo2025qwenai-creator/actions/workflows/ci.yml/badge.svg)]
+# ============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Job 1: Scala backend compile ──────────────────────────────────────────
+  scala-build:
+    name: Scala backend (sbt compile)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: download/nbody-fold-scala
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+        with:
+          sbt-version: '1.10.7'
+
+      - name: Compile Scala sources
+        run: sbt compile
+
+      - name: Run KeplerDemo (Phase 0 smoke test, 4 self-checks)
+        run: sbt "runMain nbody.KeplerDemo"
+
+      - name: Run Phase12Demo (Web Tier, 61 self-checks)
+        run: sbt "runMain nbody.Phase12Demo"
+
+  # ── Job 2: Static demo smoke test ─────────────────────────────────────────
+  static-demo:
+    name: Static demo (node smoke test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Syntax-check all JS files
+        run: |
+          for f in docs/db.js docs/physics.js docs/middleware.js docs/routes.js docs/app.js; do
+            node --check "$f" && echo "OK: $f"
+          done
+
+      - name: Run smoke test
+        run: node scripts/smoke-test.js
+
+  # ── Job 3: Next.js control plane build ────────────────────────────────────
+  nextjs-build:
+    name: Next.js control plane (npm build)
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_PROVIDER: sqlite
+      DATABASE_URL: 'file:/tmp/test.db'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Push schema to test DB
+        run: npx prisma db push
+
+      - name: Build Next.js app
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
