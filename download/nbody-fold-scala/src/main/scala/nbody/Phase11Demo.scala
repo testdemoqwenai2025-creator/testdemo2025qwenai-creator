@@ -6,13 +6,13 @@
 //   1. Manifest collects ≥ 50 Scala source files (sanity check on file walk).
 //   2. Manifest total LOC ≥ 4000 (sanity check on project substance).
 //   3. Manifest git SHA is non-empty (git is available + repo is initialized).
-//   4. Manifest phaseCount == 11 (all phases accounted for).
+//   4. Manifest phaseCount == 12 (all phases accounted for, incl. Phase 12 web tier).
 //   5. Manifest source-hash seal is deterministic (collect twice, same seal).
 //   6. Manifest SHA-256 of every file matches recomputed value (no drift).
 //   7. ReleaseArtifact JSON renders without throwing.
 //   8. ReleaseArtifact JSON parses via Phase 2 JsonParser (reuses Phase 2).
 //   9. ReleaseArtifact round-trip: parse ∘ render = identity.
-//  10. All 11 PhaseN_Demo.scala entrypoints exist on disk.
+//  10. All 12 PhaseN_Demo.scala entrypoints exist on disk.
 //  11. Zero `libraryDependencies` in build.sbt (Pillar 1 enforced).
 //  12. HANDOFF.md exists and contains required section anchors.
 //  13. RELEASE_NOTES.md exists and references all 11 phases.
@@ -64,7 +64,7 @@ object Phase11Demo:
 
     // ── 1. Collect manifest ──────────────────────────────────────────────
     println("--- 1. Collect project manifest ---")
-    val manifest = Manifest.collect(projectRoot, phaseCount = 11)
+    val manifest = Manifest.collect(projectRoot, phaseCount = 12)
     println(s"  Name:           ${manifest.name}")
     println(s"  Version:        ${manifest.version}")
     println(s"  Phase:          ${manifest.phase}")
@@ -97,8 +97,8 @@ object Phase11Demo:
       manifest.gitSha.nonEmpty,
       "git not available or repo not initialized")
 
-    check("Manifest phaseCount == 11",
-      manifest.phaseCount == 11,
+    check("Manifest phaseCount == 12",
+      manifest.phaseCount == 12,
       s"got ${manifest.phaseCount}")
 
     check("Manifest source-hash seal is 64-char lowercase hex",
@@ -112,7 +112,7 @@ object Phase11Demo:
 
     // ── 3. Determinism check: collect twice, compare seals ───────────────
     println("--- 3. Manifest determinism (collect twice, compare seals) ---")
-    val manifest2 = Manifest.collect(projectRoot, phaseCount = 11)
+    val manifest2 = Manifest.collect(projectRoot, phaseCount = 12)
     val sealSame = manifest.sourceHashSha256 == manifest2.sourceHashSha256
     check("Source-hash seal is deterministic across collections",
       sealSame,
@@ -157,10 +157,10 @@ object Phase11Demo:
       else "")
     println()
 
-    // ── 6. All 11 PhaseN_Demo.scala entrypoints exist ────────────────────
+    // ── 6. All 12 PhaseN_Demo.scala entrypoints exist ────────────────────
     println("--- 6. All PhaseN_Demo.scala entrypoints exist ---")
     val srcRoot = projectRoot.resolve("src/main/scala/nbody")
-    val expectedDemos = (1 to 11).map(n => s"Phase${n}Demo.scala").toVector :+ "KeplerDemo.scala"
+    val expectedDemos = (1 to 12).map(n => s"Phase${n}Demo.scala").toVector :+ "KeplerDemo.scala"
     expectedDemos.foreach { name =>
       val p = srcRoot.resolve(name)
       check(s"$name exists", Files.exists(p), s"missing at $p")

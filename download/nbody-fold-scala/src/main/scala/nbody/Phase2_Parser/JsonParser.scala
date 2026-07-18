@@ -24,6 +24,7 @@ enum Json:
   case JNull
   case JBool(b: Boolean)
   case JInt(n: Long)
+  case JNum(d: Double)   // Phase 12 addition: standard JSON float support
   case JStr(s: String)
   case JArr(items: List[Json])
   case JObj(members: List[(String, Json)])
@@ -43,6 +44,25 @@ object JsonParser:
   // int parser — uses spanP + notEmpty quality control (Pillar 2)
   def intP: Parser[Json] =
     notEmpty(spanP(_.isDigit)).map(s => Json.JInt(s.toLong))
+
+  // ── number parser (Phase 12 addition) ──────────────────────────────────
+  // Standard JSON numbers: -?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?
+  // We implement a deliberately lenient variant: spanP accepts any run of
+  // [0-9.\-+eE], then we pattern-match to decide JInt vs JNum.
+  //
+  // This is justified because Phase 12's web tier is the first use case
+  // that consumes standard JSON from arbitrary HTTP clients (browser fetch,
+  // curl, etc.) — Phase 0-11 only ever parsed our own numerics-as-strings
+  // convention. Without float support, the parser fails on inputs like
+  // `{"dt":0.01}`, blocking the web tier entirely.
+  def numberP: Parser[Json] =
+    notEmpty(spanP(c => c.isDigit || c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-'))
+      .map { s =>
+        if s.contains('.') || s.contains('e') || s.contains('E') then
+          Json.JNum(s.toDouble)
+        else
+          Json.JInt(s.toLong)
+      }
 
   // string parser — "..." with no escape handling (zero-dep ethos)
   def strP: Parser[Json] =
@@ -77,11 +97,11 @@ object JsonParser:
 
   // ── Top-level JSON value parser: prioritized Alternative chain ─────────
   def valueP: Parser[Json] = lexeme:
-    nullP  <|>
-    boolP  <|>
-    intP   <|>
-    strP   <|>
-    arrP   <|>
+    nullP   <|>
+    boolP   <|>
+    numberP <|>   // Phase 12: replaces intP; handles both int and float
+    strP    <|>
+    arrP    <|>
     objP
 
   // ── Convenience: parse a complete JSON document ────────────────────────
@@ -93,6 +113,7 @@ object JsonParser:
     case Json.JNull       => "null"
     case Json.JBool(b)    => b.toString
     case Json.JInt(n)     => n.toString
+    case Json.JNum(d)     => d.toString
     case Json.JStr(s)     => "\"" + s + "\""
     case Json.JArr(items) => "[" + items.map(render).mkString(", ") + "]"
     case Json.JObj(m)     =>

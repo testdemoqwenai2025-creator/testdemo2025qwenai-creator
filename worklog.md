@@ -1536,3 +1536,106 @@ Stage Summary:
 - **Local git state**: Will create 1 new commit on top of 19cc47f.
 - **Next step**: commit + push to GitHub (keeping PAT active per user
   request — more pushes may follow).
+
+---
+Task ID: 14
+Agent: main (continuation)
+Task: Tag v1.0.0 + implement Phase 12 — Zero-Dependency Scala Web Tier
+  (frontend + backend + database + middleware) using only JDK 21
+  primitives, with end-to-end demo proving full-stack communication.
+  Standing rules from user: (a) update skills.md every phase silently,
+  (b) push to GitHub every phase silently.
+
+Work Log:
+- Tagged v1.0.0 on commit 19cc47f and pushed the tag to GitHub.
+- Read prior commit `0ccefc3` (Phase 11 Next.js control plane, already
+  on GitHub). Confirmed it's a separate Next.js/React/Prisma layer at the
+  repo root, NOT the zero-dependency Scala tier. Decided to build Phase 12
+  as a complementary zero-dependency Scala web tier inside
+  `download/nbody-fold-scala/` — aligned with Pillar 1 (Zero-Dep
+  Sovereignty) and reuses Phase 0/2/5/11 modules.
+- Created `Phase12_WebTier/` with 5 source files:
+  * `Database.scala` — file-backed relational store
+    (RandomAccessFile + ConcurrentHashMap). 3 tables (systems/bodies/
+    trajectories), each row = JSON line + tab + SHA-256 hex digest.
+    Tamper-evident: verify() flags any line whose recomputed digest
+    mismatches the stored tag. On open(): replays the log into an
+    in-memory index for O(1) reads. Delete writes a `kind=delete`
+    tombstone row so reopen honors the delete.
+  * `Middleware.scala` — `type Middleware = Handler => Handler`
+    (function composition, reuses Phase 1 Applicative algebra). 7
+    middlewares: errors, preflight, cors, logging, rateLimit (token
+    bucket), jsonBody (Phase 2 JsonParser), auth (HMAC-SHA-256 request
+    signing — RFC 2104 construction with MessageDigest, no
+    javax.crypto.Mac). constantTimeEq defends against timing attacks.
+  * `Routes.scala` — REST handlers wiring DB ↔ Phase 5
+    Simulator.stepBodies ↔ Phase 2 JsonParser. 8 endpoints:
+    GET/POST /api/systems, GET/DELETE /api/systems/:id,
+    POST /api/systems/:id/step, GET /api/systems/:id/trajectories,
+    GET /api/health, GET / (frontend), 404 fallback. Step handler
+    rebuilds Vector[Body] from DB rows, calls Simulator.stepBodies N
+    times, persists trajectory samples every N steps.
+  * `Frontend.scala` — single-file HTML/JS frontend (no React/Vue/
+    Tailwind). Two <canvas> elements: trajectory x-y projection +
+    energy drift chart. Audit log panel. fetch() calls every API
+    endpoint. Auto-scales trajectory plot, marks start (green) +
+    end (red). Polls /api/health every 5s for uptime + DB row counts.
+  * `Server.scala` — `com.sun.net.httpserver.HttpServer` wrapper.
+    Translates HttpExchange ↔ Request/Response. 8-thread pool
+    executor. Middleware applied once at server setup.
+- Wrote `Phase12Demo.scala` with 61 self-checks across 7 sections:
+  §1 Database (insert/read/persist/SHA-256/tamper-detection/reopen),
+  §2 Middleware (chain/auth/rate-limit/errors/jsonBody), §3 JSON codec
+  (Body↔Json round-trip), §4 Routes (all 7 endpoints + 404),
+  §5 End-to-end HTTP (java.net.http.HttpClient against a live server),
+  §6 Frontend proof (HTML contains all expected elements), §7 Persistence
+  (close + reopen DB, data survives). Final visible end-to-end demo
+  output proves every frontend UI element pulls data through
+  middleware → routes → DB → Phase 5 engine.
+- Retrofit Phase 2 JsonParser with JNum(Double) AST variant + numberP
+  parser for standard JSON float support. Original intP only handled
+  integer literals — blocked real HTTP clients sending `0.01` etc.
+  Phase 2 self-test (Phase2Demo) still passes; Phase 8 still passes;
+  Phase 11 ReleaseArtifact still parses (it uses JStr for floats, JInt
+  for integers — no JNum impact).
+- Updated Phase11Demo.scala: phaseCount 11→12, expectedDemos now
+  includes Phase12Demo.scala. Re-ran Phase11Demo: 54/54 PASS, manifest
+  now reports 67 Scala files, 10909 LOC, 12 phases, source-hash seal
+  `9ed9c820442b235a…` (changed from `6428136ba94a9b99…` because
+  Phase 2 JsonParser + Phase 12 web tier source code was added).
+- Updated README.md: added Phase 12 status row, added Phase 12 build
+  command, expanded directory layout to show Phase12_WebTier/ subtree
+  + results/phase12-db/, expanded Pillar 1 and Pillar 6 coverage rows
+  to mention Phase 12 contributions.
+- Updated skills.md (silent standing rule): added §7 Phase 11 spec
+  + §8 Phase 12 spec, including architecture reuse notes (Phase 0
+  domain types, Phase 1 Applicative composition for middleware,
+  Phase 2 JsonParser for request/response bodies, Phase 5 Simulator
+  for physics, Phase 11 MessageDigest pattern for SHA-256/HMAC).
+- Compiled cleanly via sbt ("sbt compile" green, 0 errors 0 warnings).
+- Ran Phase12Demo: 61/61 PASS. End-to-end demo output shows real HTTP
+  round-trip: server up → create system (3 bodies, energy0 =
+  -9.98e-4) → step 200 KDK iterations (drift 2.4e-7, well under 1e-6
+  threshold) → 11 trajectory samples persisted to DB → frontend HTML
+  (9584 bytes) served with all expected elements.
+
+Stage Summary:
+- Phase 12 web tier complete: 5 source files (Database/Middleware/
+  Routes/Frontend/Server) + Phase12Demo (61/61 PASS) + Phase 2
+  JsonParser enhancement (JNum/numberP).
+- Full-stack proof: Phase12Demo §5 starts a real HTTP server, drives
+  it with java.net.http.HttpClient, and confirms every endpoint
+  responds correctly. §6 confirms the HTML frontend contains all
+  expected UI elements (canvases, audit log, fetch() calls to every
+  API route). §7 confirms DB persistence across server restart.
+- Zero-regression: Phase 2 (5/5 sections), Phase 8 (27/27), Phase 11
+  (54/54 — was 53, +1 new check for phaseCount==12) all still pass.
+- Pillar 1 (Zero-Dependency Sovereignty) preserved: build.sbt still
+  declares zero libraryDependencies. HTTP server is JDK built-in,
+  database is JDK RandomAccessFile + ConcurrentHashMap (no SQLite/H2
+  JDBC driver), middleware is hand-rolled function composition (no
+  Express/Akka-HTTP).
+- Project totals: 67 Scala files, 10909 LOC, 12 phases, ~430
+  cumulative self-checks passing.
+- Next step: commit + push to GitHub (silent standing rule), then
+  suggest Phase 13 candidates to the user.

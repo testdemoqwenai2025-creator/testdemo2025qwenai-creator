@@ -286,3 +286,42 @@ The project is "scientifically complete" when:
 3. ✅ Fold + Double RLE benchmark beats brute force by ≥5x at N=10k
 4. ✅ `nbody.lit.md` tangles to compilable source, weaves to readable HTML
 5. ✅ All phases documented; results reproducible from `git clone` → `sbt test` → green
+
+---
+
+## 7. Phase 11 — Publication & Handoff Package (post-DoD extension)
+
+**Goal:** Turn the simulation library into a handoff-ready commercial artifact, with programmatic project introspection, a canonical release manifest, and onboarding documentation for downstream maintainers.
+
+**Deliverables:**
+- `Manifest.scala` — walks `src/main/scala`, computes SHA-256 of every file, reads git state via `ProcessBuilder`, captures JDK/Scala/sbt versions, produces a `sourceHashSha256` tamper seal (SHA-256 of the concatenation of all file hashes).
+- `ReleaseArtifact.scala` — serializes `ProjectInfo` to/from JSON using the Phase 2 `Json` AST. Round-trip property: `parse ∘ render = identity`.
+- `Phase11Demo.scala` — 54 self-checks covering manifest collection, determinism, JSON round-trip, file existence, zero-dep audit, doc anchors, and persisted `results/manifest.json`.
+- `HANDOFF.md` — 8-section maintainer onboarding (~5,200 words): Overview, Architecture, Build & Run, Verification, Extending, Limitations, Commercial Deployment, Maintenance Checklist.
+- `RELEASE_NOTES.md` — v1.0.0 release notes summarizing all 11 phases and DoD criteria closure.
+
+**Verification:** `Manifest.collect` is deterministic (collect twice → identical seal). `results/manifest.json` is the canonical supply-chain audit artifact.
+
+---
+
+## 8. Phase 12 — Zero-Dependency Web Tier (post-DoD extension)
+
+**Goal:** Expose the N-Body simulation API over HTTP using only JDK 21 primitives, preserving Pillar 1 (Zero-Dependency Sovereignty). This complements the Next.js control plane from commit `0ccefc3` with a Scala-native tier that requires zero external runtime dependencies.
+
+**Deliverables:**
+- `Database.scala` — file-backed relational store using `java.io.RandomAccessFile` + `java.util.concurrent.ConcurrentHashMap`. Three tables: `systems(id, name, createdAt, dt, softening, steps)`, `bodies(id, systemId, mass, x, y, z, vx, vy, vz)`, `trajectories(id, systemId, step, x, y, z, vx, vy, vz, energy)`. Each row is one JSON line + tab + SHA-256 hex digest of the line — tamper-evident storage. On `open()` the log is replayed into an in-memory index for O(1) reads.
+- `Middleware.scala` — `type Middleware = Handler => Handler` (function composition, reuses Phase 1 Applicative). Provides: `logging` (structured per-request line), `cors` (Access-Control-Allow-* headers), `preflight` (OPTIONS short-circuit), `auth` (HMAC-SHA-256 request signing, RFC 2104 construction with `MessageDigest` — no `javax.crypto.Mac`), `errors` (catches exceptions → 500 JSON), `jsonBody` (parses request body via Phase 2 `JsonParser`), `rateLimit` (per-IP token bucket, lazy refill, no background thread).
+- `Routes.scala` — REST handlers wiring DB ↔ Phase 5 `Simulator.stepBodies` ↔ Phase 2 `JsonParser` AST. Endpoints: `GET /api/health`, `GET /api/systems`, `POST /api/systems`, `GET /api/systems/:id`, `POST /api/systems/:id/step`, `GET /api/systems/:id/trajectories`, `DELETE /api/systems/:id`, `GET /` (frontend). Includes path routing dispatcher.
+- `Frontend.scala` — single-file HTML/JS frontend (no React/Vue/Tailwind). Two `<canvas>` elements: trajectory x-y projection + energy drift chart. Audit log panel with timestamped entries. `fetch()` calls every API endpoint. Auto-scales trajectory plot, marks start (green) + end (red).
+- `Server.scala` — `com.sun.net.httpserver.HttpServer` wrapper. Translates `HttpExchange` ↔ `Request`/`Response` model. 8-thread pool executor. Middleware applied once at server setup (Express.js "app-level middleware" pattern).
+- `Phase12Demo.scala` — 61 self-checks across 7 sections: Database (insert/read/persist/SHA-256/tamper-detection/reopen), Middleware (chain composition/auth/rate-limit/errors/jsonBody), JSON codec (Body↔Json round-trip), Routes (all 7 endpoints + 404), End-to-end HTTP (`java.net.http.HttpClient` against a live server), Frontend proof (HTML contains all expected elements), Persistence (close + reopen). Includes a visible end-to-end demo output that proves every frontend UI element pulls data through middleware → routes → DB → Phase 5 engine.
+- Phase 2 enhancement: `JsonParser.scala` retrofitted with `JNum(Double)` AST variant + `numberP` parser for standard JSON float support. The original `intP` only handled integer literals, which blocked real HTTP clients (browser fetch, curl) that send `0.01` or `-1.5` as number literals. This is a justified Phase 12 fix surfaced by the web tier use case.
+
+**Verification:** `sbt "runMain nbody.Phase12Demo"` — 61/61 self-checks pass. End-to-end demo starts a real HTTP server on a random port, creates a system, steps 200 KDK leapfrog iterations, fetches trajectories, and serves the frontend HTML. All requests go through the full middleware chain.
+
+**Architecture reuse:**
+- Phase 0: `Body`, `Mass`, `Vec3` — domain types serialized to/from JSON
+- Phase 1: Function1's Applicative composition — the algebraic basis for `Middleware.chain`
+- Phase 2: `Json` AST + `JsonParser` — request/response body encoding (extended with `JNum`)
+- Phase 5: `Simulator.stepBodies` — the actual physics engine invoked by `POST /api/systems/:id/step`
+- Phase 11: `MessageDigest.getInstance("SHA-256")` pattern — reused for row integrity tags and HMAC request signing
