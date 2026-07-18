@@ -703,6 +703,32 @@ kbd {
   font-family: var(--mono);
   font-size: 11px;
 }
+/* Phase 21: Moon + Halley toggles — small inline checkboxes */
+.planet-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+  background: rgba(31, 111, 235, 0.05);
+  transition: all 0.15s ease;
+}
+.planet-toggle-label:hover {
+  border-color: #388bfd;
+  color: var(--text);
+  background: rgba(31, 111, 235, 0.12);
+}
+.planet-toggle-label input[type="checkbox"] {
+  accent-color: #1f6feb;
+  margin: 0;
+  cursor: pointer;
+}
 .primary-btn {
   background: linear-gradient(180deg, #1f6feb 0%, #1158c7 100%);
   border: 1px solid #388bfd;
@@ -739,6 +765,30 @@ kbd {
   height: 8px;
   border-radius: 50%;
   box-shadow: 0 0 4px currentColor;
+}
+/* Phase 21: comet legend dot gets a small horizontal "tail" via ::after */
+.planet-legend-dot.is-comet {
+  position: relative;
+  box-shadow: 0 0 6px currentColor;
+}
+.planet-legend-dot.is-comet::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 100%;
+  width: 12px;
+  height: 1.5px;
+  background: linear-gradient(90deg, currentColor 0%, transparent 100%);
+  transform: translateY(-50%);
+  opacity: 0.7;
+}
+/* Phase 21: moon legend dot is smaller + outlined */
+.planet-legend-dot.is-moon {
+  width: 6px;
+  height: 6px;
+  border: 1px solid currentColor;
+  background: transparent;
+  box-shadow: 0 0 3px currentColor;
 }
 
 /* ── ISS tracker card ── */

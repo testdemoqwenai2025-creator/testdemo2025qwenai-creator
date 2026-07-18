@@ -402,20 +402,73 @@
   //
   // If spacedata.js is not loaded, falls back to the static solarSystem()
   // generator (4 fictitious planets at round-number radii).
-  function solarSystemLive(date) {
+  //
+  // Phase 21 extension: optionally includes Earth's Moon (positioned relative
+  // to Earth using the ELP-2000 truncated model) and 1P/Halley's Comet
+  // (J2000 osculating elements propagated to the requested date). Pass
+  // { moon: true, halley: true } as the second arg to include them.
+  function solarSystemLive(date, opts) {
     if (typeof global.NBodySpaceData === 'undefined' || !global.NBodySpaceData.computePlanets) {
       return solarSystem();
     }
-    const planets = global.NBodySpaceData.computePlanets(date || new Date());
-    // The MutableBodySystem constructor expects {mass, x, y, z, vx, vy, vz}.
-    // NBodySpaceData returns exactly this shape, plus name + color metadata
-    // that the constructor ignores but the renderer can use.
-    return planets.map(p => ({
+    const SD = global.NBodySpaceData;
+    const options = opts || {};
+    const includeMoon   = options.moon   !== false;  // default: include Moon
+    const includeHalley = options.halley !== false;  // default: include Halley
+
+    const planets = SD.computePlanets(date || new Date());
+    const bodies = planets.map(p => ({
       mass: p.mass,
       x: p.x, y: p.y, z: p.z,
       vx: p.vx, vy: p.vy, vz: p.vz,
       name: p.name, color: p.color
     }));
+
+    // Phase 21: append the Moon (orbits Earth) if requested
+    if (includeMoon && typeof SD.computeMoon === 'function') {
+      const earth = bodies.find(b => b.name === 'Earth');
+      if (earth) {
+        const moon = SD.computeMoon(earth, date || new Date());
+        if (moon) {
+          bodies.push({
+            mass: moon.mass,
+            x: moon.x, y: moon.y, z: moon.z,
+            vx: moon.vx, vy: moon.vy, vz: moon.vz,
+            name: moon.name, color: moon.color, isMoon: true
+          });
+        }
+      }
+    }
+
+    // Phase 21: append Halley's Comet if requested
+    if (includeHalley && typeof SD.computeHalley === 'function') {
+      const halley = SD.computeHalley(date || new Date());
+      if (halley) {
+        bodies.push({
+          mass: halley.mass,
+          x: halley.x, y: halley.y, z: halley.z,
+          vx: halley.vx, vy: halley.vy, vz: halley.vz,
+          name: halley.name, color: halley.color, isComet: true
+        });
+      }
+    }
+
+    // Re-null the system center-of-mass velocity + position so the Moon's
+    // addition (which is small but non-zero) doesn't introduce drift.
+    let totalMass = 0, vcmX = 0, vcmY = 0, vcmZ = 0;
+    let pcmX = 0, pcmY = 0, pcmZ = 0;
+    for (const b of bodies) {
+      totalMass += b.mass;
+      vcmX += b.mass * b.vx; vcmY += b.mass * b.vy; vcmZ += b.mass * b.vz;
+      pcmX += b.mass * b.x;  pcmY += b.mass * b.y;  pcmZ += b.mass * b.z;
+    }
+    const vx0 = vcmX / totalMass, vy0 = vcmY / totalMass, vz0 = vcmZ / totalMass;
+    const px0 = pcmX / totalMass, py0 = pcmY / totalMass, pz0 = pcmZ / totalMass;
+    for (const b of bodies) {
+      b.vx -= vx0; b.vy -= vy0; b.vz -= vz0;
+      b.x  -= px0; b.y  -= py0; b.z  -= pz0;
+    }
+    return bodies;
   }
 
   global.NBodyPhysics = {

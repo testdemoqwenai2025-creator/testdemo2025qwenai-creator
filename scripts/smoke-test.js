@@ -364,10 +364,13 @@ assert(allValid, 'all planet state vectors are valid numbers');
 assert(typeof P.solarSystemLive === 'function',
        'physics.js exposes solarSystemLive() (Phase 20)');
 
-// Verify solarSystemLive() returns the same 9 bodies (with name + color metadata)
-const liveBodies = P.solarSystemLive(new Date('2000-01-01T12:00:00Z'));
+// Verify solarSystemLive() returns the same 9 bodies (with name + color metadata).
+// Phase 21 note: solarSystemLive() now defaults to including Moon + Halley
+// (11 bodies). To get just the 9 planet bodies (back-compat with Phase 20),
+// pass {moon:false, halley:false} explicitly.
+const liveBodies = P.solarSystemLive(new Date('2000-01-01T12:00:00Z'), { moon: false, halley: false });
 assert(Array.isArray(liveBodies) && liveBodies.length === 9,
-       'solarSystemLive() returns 9 bodies (Sun + 8 planets)');
+       'solarSystemLive() returns 9 bodies (Sun + 8 planets) when extras disabled');
 const earthFromBody = liveBodies.find(b => b.name === 'Earth');
 assert(typeof earthFromBody === 'object',
        'solarSystemLive() bodies carry name metadata (Earth found)');
@@ -418,6 +421,122 @@ assert(appSrc20.indexOf('_drawISSMap') >= 0,       'app.js has _drawISSMap rende
 assert(appSrc20.indexOf('solarSystemLive') >= 0,   'app.js handles solarSystemLive preset');
 assert(appSrc20.indexOf('solarSystemLive') >= 0 && appSrc20.indexOf('SCENARIO_PARAMS') >= 0,
        'solarSystemLive added to SCENARIO_PARAMS table');
+
+// ── Phase 21: Cosmic Companions (Moon + Halley's Comet + comet tails) ─────
+console.log('\n--- Phase 21: Cosmic Companions ---');
+const SD21 = sandbox.window.NBodySpaceData;
+assert(typeof SD21.computeMoon   === 'function', 'computeMoon() exported (Phase 21)');
+assert(typeof SD21.computeHalley === 'function', 'computeHalley() exported (Phase 21)');
+assert(Array.isArray(SD21.EXTRA_BODIES) && SD21.EXTRA_BODIES.length === 2,
+       'EXTRA_BODIES array has 2 entries (Moon + Halley)');
+assert(SD21.MOON_INFO   && SD21.MOON_INFO.name   === 'Moon',   'MOON_INFO metadata present');
+assert(SD21.HALLEY_INFO && SD21.HALLEY_INFO.name === 'Halley', 'HALLEY_INFO metadata present');
+
+// Verify Moon orbital elements are baked in
+const moonEl = SD21._MOON_ELEMENTS;
+assert(moonEl && Math.abs(moonEl.a0 - 0.0025695555) < 1e-6, 'Moon semi-major axis baked in (a=0.00257 AU)');
+assert(moonEl && Math.abs(moonEl.e0 - 0.055545526)  < 1e-6, 'Moon eccentricity baked in (e=0.0555)');
+assert(moonEl && Math.abs(moonEl.mass - 3.6943e-8)  < 1e-12, 'Moon mass ratio baked in (M_moon/M_sun)');
+
+// Verify Halley orbital elements are baked in
+const halleyEl = SD21._HALLEY_ELEMENTS;
+assert(halleyEl && Math.abs(halleyEl.a0 - 17.784)        < 0.01,  "Halley semi-major axis baked in (a=17.784 AU)");
+assert(halleyEl && Math.abs(halleyEl.e0 - 0.967142908)   < 1e-6,  "Halley eccentricity baked in (e=0.967 — high)");
+assert(halleyEl && Math.abs(halleyEl.i0 - 162.262674)    < 0.01,  "Halley inclination baked in (i=162° — retrograde)");
+assert(halleyEl && Math.abs(halleyEl.dL - 360.0/75.32)   < 1e-6,  "Halley mean motion baked in (P=75.32 yr)");
+
+// Compute Moon at J2000 — should be near Earth, ~0.00257 AU away
+const j2000date_p21 = new Date('2000-01-01T12:00:00Z');
+const planetsJ2000_p21 = SD21.computePlanets(j2000date_p21);
+const earthJ2000_p21 = planetsJ2000_p21.find(p => p.name === 'Earth');
+const moonJ2000  = SD21.computeMoon(earthJ2000_p21, j2000date_p21);
+assert(moonJ2000 && moonJ2000.isMoon === true, "computeMoon() returns isMoon=true");
+const moonEarthDist = Math.sqrt(
+  (moonJ2000.x - earthJ2000_p21.x)**2 +
+  (moonJ2000.y - earthJ2000_p21.y)**2 +
+  (moonJ2000.z - earthJ2000_p21.z)**2
+);
+assert(Math.abs(moonEarthDist - 0.00257) < 0.001,
+       'Moon is ~0.00257 AU from Earth at J2000 (got ' + moonEarthDist.toFixed(6) + ' AU)');
+assert(Math.abs(moonJ2000.mass - 3.6943e-8) < 1e-12,
+       'Moon mass is M_moon/M_sun = 3.69e-8');
+
+// Compute Halley at J2000 — should be in a valid orbit (0.586 < r < 35 AU)
+const halleyJ2000 = SD21.computeHalley(j2000date_p21);
+assert(halleyJ2000 && halleyJ2000.isComet === true, "computeHalley() returns isComet=true");
+const halleyR = Math.sqrt(halleyJ2000.x**2 + halleyJ2000.y**2 + halleyJ2000.z**2);
+assert(halleyR > 0.5 && halleyR < 36,
+       "Halley at J2000 is within its orbital range (r=" + halleyR.toFixed(3) + " AU, expected 0.59-35)");
+assert(Math.abs(halleyJ2000.mass - 1e-16) < 1e-20,
+       "Halley mass is the rendering fiction value 1e-16");
+
+// Verify physics.js solarSystemLive(date, opts) includes Moon + Halley
+const liveBodies21 = P.solarSystemLive(j2000date_p21, { moon: true, halley: true });
+assert(liveBodies21.length === 11,
+       'solarSystemLive(date, {moon:true, halley:true}) returns 11 bodies (got ' + liveBodies21.length + ')');
+assert(liveBodies21.some(b => b.isMoon === true),  'live system includes a Moon body (isMoon=true)');
+assert(liveBodies21.some(b => b.isComet === true), 'live system includes a Halley body (isComet=true)');
+assert(liveBodies21.some(b => b.name === 'Moon'),  'live system includes a body named "Moon"');
+assert(liveBodies21.some(b => b.name === 'Halley'), 'live system includes a body named "Halley"');
+
+// Verify the Moon body is positioned near Earth in the live system
+const earthInLive   = liveBodies21.find(b => b.name === 'Earth');
+const moonInLive    = liveBodies21.find(b => b.name === 'Moon');
+const moonLiveDist  = Math.sqrt(
+  (earthInLive.x - moonInLive.x)**2 +
+  (earthInLive.y - moonInLive.y)**2 +
+  (earthInLive.z - moonInLive.z)**2
+);
+assert(Math.abs(moonLiveDist - 0.00257) < 0.001,
+       'Moon body is ~0.00257 AU from Earth body in live system (got ' + moonLiveDist.toFixed(6) + ')');
+
+// Verify solarSystemLive(date, {moon:false, halley:false}) still works (back-compat)
+const liveBodiesNoExtras = P.solarSystemLive(j2000date_p21, { moon: false, halley: false });
+assert(liveBodiesNoExtras.length === 9,
+       'solarSystemLive(date, {moon:false, halley:false}) returns 9 bodies (back-compat)');
+
+// Verify energy conservation with the full 11-body system over 100 steps
+// (Solar system is chaotic but should be stable for short times)
+const sys21 = new P.MutableBodySystem(liveBodies21, 0.001, 0.0001);
+const e0_21 = sys21.energy();
+for (let i = 0; i < 100; i++) sys21.step();
+const e100_21 = sys21.energy();
+const drift21 = Math.abs((e100_21 - e0_21) / e0_21);
+assert(drift21 < 0.05,
+       '11-body live system (Sun+8 planets+Moon+Halley) conserves energy over 100 steps (drift=' + drift21.toExponential(2) + ')');
+
+// Verify the HTML has the Phase 21 toggle checkboxes
+assert(htmlSrc.indexOf('id="live-ss-moon"')   >= 0, 'Moon toggle checkbox in HTML');
+assert(htmlSrc.indexOf('id="live-ss-halley"') >= 0, 'Halley toggle checkbox in HTML');
+assert(htmlSrc.indexOf('solarSystemLiveNoMoon') >= 0, 'solarSystemLiveNoMoon scenario in HTML');
+assert(htmlSrc.indexOf('Inner Planets + Moon + Halley') >= 0,
+       'Phase 21 scenario button label in HTML');
+assert(htmlSrc.indexOf('Phase 20+21') >= 0, 'Phase 21 mentioned in panel header');
+
+// Verify styles.css has the Phase 21 toggle + legend styles
+const cssSrc21 = load('styles.css');
+assert(cssSrc21.indexOf('.planet-toggle-label') >= 0, 'planet-toggle-label CSS rule exists');
+assert(cssSrc21.indexOf('.planet-legend-dot.is-comet') >= 0, 'comet legend dot CSS rule exists');
+assert(cssSrc21.indexOf('.planet-legend-dot.is-moon') >= 0,  'moon legend dot CSS rule exists');
+
+// Verify app.js handles Phase 21 (scenario key, toggles, legend population)
+const appSrc21 = load('app.js');
+assert(appSrc21.indexOf('solarSystemLiveNoMoon') >= 0, 'app.js handles solarSystemLiveNoMoon preset');
+assert(appSrc21.indexOf('live-ss-moon') >= 0,   'app.js reads Moon toggle checkbox');
+assert(appSrc21.indexOf('live-ss-halley') >= 0, 'app.js reads Halley toggle checkbox');
+assert(appSrc21.indexOf('EXTRA_BODIES') >= 0,   'app.js populates legend with EXTRA_BODIES');
+assert(appSrc21.indexOf('is-comet') >= 0,       'app.js applies is-comet CSS class for Halley legend dot');
+assert(appSrc21.indexOf('is-moon') >= 0,        'app.js applies is-moon CSS class for Moon legend dot');
+
+// Verify viz3d.js has the comet tail renderer
+const vizSrc21 = load('viz3d.js');
+assert(vizSrc21.indexOf('drawCometTail') >= 0,    'viz3d.js has drawCometTail method');
+assert(vizSrc21.indexOf('isComet') >= 0,          'viz3d.js checks isComet flag');
+assert(vizSrc21.indexOf('bodyTint') >= 0,         'viz3d.js has bodyTint() for real per-body colors');
+assert(vizSrc21.indexOf('Anti-solar') >= 0 || vizSrc21.indexOf('anti-solar') >= 0,
+       'viz3d.js documents anti-solar tail direction');
+assert(vizSrc21.indexOf('ion') >= 0 && vizSrc21.indexOf('dust') >= 0,
+       'viz3d.js renders both ion + dust comet tail layers');
 
 // ── Summary ──────────────────────────────────────────────────────────────
 console.log('\n=========================');

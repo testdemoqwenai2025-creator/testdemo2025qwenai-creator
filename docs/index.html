@@ -33,7 +33,7 @@
          (3) ISS tracker — polls wheretheiss.at every 5 s for the live ISS
              position, rendered on an equirectangular world map -->
     <section class="panel space-data-panel">
-      <h2>Live space data <small class="hint-inline">Phase 20 · NASA APOD · JPL planet ephemeris · live ISS tracker</small></h2>
+      <h2>Live space data <small class="hint-inline">Phase 20+21 · NASA APOD · JPL planet ephemeris · live ISS tracker · Moon + Halley's Comet</small></h2>
 
       <div class="space-data-grid">
 
@@ -73,6 +73,12 @@
               epoch
               <input id="live-ss-date" type="date">
             </label>
+            <label class="planet-toggle-label" title="Include Earth's Moon (ELP-2000 elements)">
+              <input id="live-ss-moon" type="checkbox" checked> Moon
+            </label>
+            <label class="planet-toggle-label" title="Include 1P/Halley's Comet (J2000 osculating elements)">
+              <input id="live-ss-halley" type="checkbox" checked> Halley
+            </label>
           </div>
           <div class="planet-legend" id="planet-legend"></div>
         </div>
@@ -105,6 +111,7 @@
       <h2>Scenario library <small class="hint-inline">Phase 15 · one-click presets</small></h2>
       <div class="scenario-row">
         <button class="scenario-btn live-data-btn" data-scenario="solarSystemLive">🪐 Live Solar System (today)</button>
+        <button class="scenario-btn live-data-btn" data-scenario="solarSystemLiveNoMoon">🪐 Inner Planets + Moon + Halley</button>
         <button class="scenario-btn" data-scenario="solarSystem">☀ Solar System</button>
         <button class="scenario-btn" data-scenario="figure8">∞ Figure-8</button>
         <button class="scenario-btn" data-scenario="binaryWithPlanet">⋆ Binary + Planet</button>
@@ -121,6 +128,7 @@
         <label>Preset
           <select id="preset">
             <option value="solarSystemLive">🪐 Live Solar System (JPL ephemeris)</option>
+            <option value="solarSystemLiveNoMoon">🪐 Inner Planets + Moon + Halley</option>
             <option value="twoBody">two-body (Kepler)</option>
             <option value="solarSystem">Solar System (Phase 15)</option>
             <option value="figure8">Figure-8 (Phase 15)</option>

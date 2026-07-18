@@ -239,6 +239,16 @@
     if (preset === 'twoBody')           bodies = P.twoBodyCircular({ m: 1e-3 });
     else if (preset === 'solarSystem')      bodies = P.solarSystem();
     else if (preset === 'solarSystemLive')  bodies = P.solarSystemLive();  // Phase 20: real JPL positions
+    else if (preset === 'solarSystemLiveNoMoon') {  // Phase 21: live + Moon + Halley
+      // Read the Moon/Halley toggle state from the panel checkboxes (default ON)
+      const moonCb   = document.getElementById('live-ss-moon');
+      const halleyCb = document.getElementById('live-ss-halley');
+      const opts = {
+        moon:   moonCb   ? moonCb.checked   : true,
+        halley: halleyCb ? halleyCb.checked : true
+      };
+      bodies = P.solarSystemLive(undefined, opts);
+    }
     else if (preset === 'figure8')          bodies = P.figure8();
     else if (preset === 'binaryWithPlanet') bodies = P.binaryWithPlanet();
     else if (preset === 'plummer32')        bodies = P.plummerSphere(32, 1);
@@ -583,7 +593,7 @@
     // If a scenario is requested in the URL, run it (overrides the default
     // figure8 auto-run, but only if noAuto or tour=1 isn't set)
     if (s.s && !urlParams.get('noAuto') && !urlParams.get('tour')) {
-      const valid = ['twoBody','solarSystem','solarSystemLive','figure8','binaryWithPlanet','plummer32','plummer128','lattice27'];
+      const valid = ['twoBody','solarSystem','solarSystemLive','solarSystemLiveNoMoon','figure8','binaryWithPlanet','plummer32','plummer128','lattice27'];
       if (valid.indexOf(s.s) >= 0) {
         setTimeout(() => runScenario(s.s), 600);
         return true;
@@ -678,13 +688,14 @@
   // One-click presets: create system + run 300 steps + load + switch to 3D.
   // Scenario-specific step counts + sample intervals tuned per scenario.
   const SCENARIO_PARAMS = {
-    solarSystemLive:  { name: 'live-solar',       dt: 0.002, softening: 0.0001, steps: 3000, sampleEvery: 10 },
-    solarSystem:      { name: 'solar-system',     dt: 0.005, softening: 0.001, steps: 1500, sampleEvery: 10 },
-    figure8:          { name: 'figure-8',         dt: 0.001, softening: 0.0,   steps: 6326, sampleEvery: 20 },  // T ≈ 6.3259
-    binaryWithPlanet: { name: 'binary-planet',    dt: 0.005, softening: 0.001, steps: 2000, sampleEvery: 10 },
-    twoBody:          { name: 'two-body',         dt: 0.01,  softening: 0.001, steps: 500,  sampleEvery: 5  },
-    plummer32:        { name: 'plummer-32',       dt: 0.01,  softening: 0.05,  steps: 500,  sampleEvery: 10 },
-    lattice27:        { name: 'lattice-27',       dt: 0.01,  softening: 0.05,  steps: 300,  sampleEvery: 10 }
+    solarSystemLive:       { name: 'live-solar',       dt: 0.002, softening: 0.0001, steps: 3000, sampleEvery: 10 },
+    solarSystemLiveNoMoon: { name: 'live-solar-xtras', dt: 0.002, softening: 0.0001, steps: 3000, sampleEvery: 10 },  // Phase 21
+    solarSystem:           { name: 'solar-system',     dt: 0.005, softening: 0.001,  steps: 1500, sampleEvery: 10 },
+    figure8:               { name: 'figure-8',         dt: 0.001, softening: 0.0,    steps: 6326, sampleEvery: 20 },  // T ≈ 6.3259
+    binaryWithPlanet:      { name: 'binary-planet',    dt: 0.005, softening: 0.001,  steps: 2000, sampleEvery: 10 },
+    twoBody:               { name: 'two-body',         dt: 0.01,  softening: 0.001,  steps: 500,  sampleEvery: 5  },
+    plummer32:             { name: 'plummer-32',       dt: 0.01,  softening: 0.05,   steps: 500,  sampleEvery: 10 },
+    lattice27:             { name: 'lattice-27',       dt: 0.01,  softening: 0.05,   steps: 300,  sampleEvery: 10 }
   };
 
   async function runScenario(scenarioKey) {
@@ -763,12 +774,14 @@
   document.querySelectorAll('.scenario-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const key = btn.dataset.scenario;
-      if (key === 'solarSystemLive') {
-        // Phase 20: the live-solar scenario uses real JPL planet positions
-        // and needs its own custom run handler (because it has to set the
-        // epoch, build bodies from NBodySpaceData, etc.).
+      if (key === 'solarSystemLive' || key === 'solarSystemLiveNoMoon') {
+        // Phase 20+21: the live-solar scenario family uses real JPL planet
+        // positions and needs its own custom run handler (because it has
+        // to set the epoch, build bodies from NBodySpaceData, etc.).
+        // Phase 21's solarSystemLiveNoMoon variant additionally toggles
+        // Moon + Halley on via the panel checkboxes (default ON).
         if (typeof _runLiveSolarSystem === 'function') {
-          _runLiveSolarSystem();
+          _runLiveSolarSystem(key);
         } else {
           runScenario(key);  // fallback if Phase 20 isn't initialized
         }
@@ -962,11 +975,11 @@
   let _issStop = null;
   let _issLastPos = null;
 
-  function _runLiveSolarSystem() {
-    return _runLiveSolarSystemImpl();
+  function _runLiveSolarSystem(scenarioKey) {
+    return _runLiveSolarSystemImpl(scenarioKey);
   }
 
-  async function _runLiveSolarSystemImpl() {
+  async function _runLiveSolarSystemImpl(scenarioKey) {
     if (!SPACE_DATA_ENABLED) {
       appendAuditLog({ method: 'UI', path: '/spacedata/live-solar', status: 0, ms: 0,
                        meta: 'spacedata.js not loaded' });
@@ -978,30 +991,57 @@
     if (btn) btn.disabled = true;
 
     try {
+      // Phase 21: determine which extras to include based on scenario key +
+      // checkbox state. 'solarSystemLive' (Phase 20) = no extras (back-compat).
+      // 'solarSystemLiveNoMoon' (Phase 21) = use checkbox state (default ON).
+      const key = scenarioKey || 'solarSystemLive';
+      let opts = { moon: false, halley: false };
+      if (key === 'solarSystemLiveNoMoon') {
+        const moonCb   = $('live-ss-moon');
+        const halleyCb = $('live-ss-halley');
+        opts.moon   = moonCb   ? moonCb.checked   : true;
+        opts.halley = halleyCb ? halleyCb.checked : true;
+      }
+
       // Parse the chosen epoch (or default to now)
       const dateInput = $('live-ss-date');
       let epoch = new Date();
       if (dateInput && dateInput.value) {
         epoch = new Date(dateInput.value + 'T12:00:00Z');
       }
-      // Compute real planet positions
+      // Compute real planet positions + extras (Phase 21)
       const planets = SD.computePlanets(epoch);
       if (!planets || planets.length < 9) throw new Error('insufficient planet data');
 
+      const extras = [];
+      if (opts.moon && typeof SD.computeMoon === 'function') {
+        const earth = planets.find(p => p.name === 'Earth');
+        if (earth) {
+          const moon = SD.computeMoon(earth, epoch);
+          if (moon) extras.push(moon);
+        }
+      }
+      if (opts.halley && typeof SD.computeHalley === 'function') {
+        const halley = SD.computeHalley(epoch);
+        if (halley) extras.push(halley);
+      }
+
       // Update the IC form so the user sees what's running
       const presetSel = $('preset');
-      if (presetSel) presetSel.value = _liveScenarioKey;
+      if (presetSel) presetSel.value = key;
       const dtInp = $('dt');       if (dtInp) dtInp.value = 0.002;
       const softInp = $('softening'); if (softInp) softInp.value = 0.0001;
-      const nameInp = $('sysname');   if (nameInp) nameInp.value = 'live-solar-' + epoch.toISOString().slice(0,10);
+      const nameInp = $('sysname');   if (nameInp) nameInp.value = 'live-solar-' + epoch.toISOString().slice(0,10)
+                                            + (opts.moon ? '+M' : '') + (opts.halley ? '+H' : '');
       const stepsInp = $('step-count'); if (stepsInp) stepsInp.value = 3000;
       const sampleInp = $('step-sample'); if (sampleInp) sampleInp.value = 10;
 
       // Persist in URL hash so refresh/share restores the live scenario
-      _syncUrlState({ s: _liveScenarioKey });
+      _syncUrlState({ s: key });
 
-      // Create the system (createSystem picks up solarSystemLive preset)
-      const id = await createSystem(_liveScenarioKey);
+      // Create the system (createSystem picks up the right preset, which for
+      // 'solarSystemLiveNoMoon' calls P.solarSystemLive(undefined, opts))
+      const id = await createSystem(key);
       if (!id) throw new Error('create failed');
 
       // Auto-switch to 3D for the full solar-system view
@@ -1025,16 +1065,20 @@
 
       if (badge) {
         // planets[] layout: [Sun, Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, Neptune]
-        // Find Earth by name (more robust than hardcoding index 3)
         const earth = planets.find(p => p.name === 'Earth');
         const earthR = earth
           ? Math.sqrt(earth.x**2 + earth.y**2 + earth.z**2).toFixed(3)
           : '—';
-        badge.textContent = '● LIVE · ' + epoch.toISOString().slice(0,10) + ' · Earth r=' + earthR + ' AU';
+        const extraStr = (opts.moon ? ' +Moon' : '') + (opts.halley ? ' +Halley' : '');
+        const totalBodies = planets.length + extras.length;
+        badge.textContent = '● LIVE · ' + epoch.toISOString().slice(0,10) + ' · '
+                          + totalBodies + ' bodies · Earth r=' + earthR + ' AU' + extraStr;
         badge.className = 'space-card-badge live';
       }
       appendAuditLog({ method: 'UI', path: '/spacedata/live-solar', status: 200, ms: 0,
-                       meta: '9 bodies (Sun + 8 planets), epoch=' + epoch.toISOString().slice(0,10) });
+                       meta: (planets.length + extras.length) + ' bodies (Sun + 8 planets'
+                              + (opts.moon ? ' + Moon' : '') + (opts.halley ? ' + Halley' : '')
+                              + '), epoch=' + epoch.toISOString().slice(0,10) });
     } catch (e) {
       if (badge) { badge.textContent = 'error: ' + e.message; badge.className = 'space-card-badge error'; }
       appendAuditLog({ method: 'UI', path: '/spacedata/live-solar', status: 0, ms: 0,
@@ -1083,12 +1127,26 @@
     const el = $('planet-legend');
     if (!el) return;
     el.innerHTML = '';
+    // Phase 20: 8 planets
     for (const p of SD.PLANET_INFO) {
       const item = document.createElement('span');
       item.className = 'planet-legend-item';
       item.innerHTML = '<span class="planet-legend-dot" style="background:' + p.color + ';color:' + p.color + '"></span>' +
                        p.name;
       el.appendChild(item);
+    }
+    // Phase 21: Moon + Halley's Comet (with distinct dot styles)
+    if (SD.EXTRA_BODIES) {
+      for (const x of SD.EXTRA_BODIES) {
+        const item = document.createElement('span');
+        item.className = 'planet-legend-item';
+        const dotClass = x.kind === 'comet' ? 'planet-legend-dot is-comet'
+                       : x.kind === 'moon'  ? 'planet-legend-dot is-moon'
+                       : 'planet-legend-dot';
+        item.innerHTML = '<span class="' + dotClass + '" style="background:' + x.color + ';color:' + x.color + '"></span>' +
+                         x.name;
+        el.appendChild(item);
+      }
     }
   }
 
@@ -1330,7 +1388,7 @@
     // If URL hash specifies a scenario, run it; otherwise default to figure8
     const urlState = _parseHash();
     const initialScenario = urlState.s || 'figure8';
-    const validScenarios = ['twoBody','solarSystem','solarSystemLive','figure8','binaryWithPlanet','plummer32','plummer128','lattice27'];
+    const validScenarios = ['twoBody','solarSystem','solarSystemLive','solarSystemLiveNoMoon','figure8','binaryWithPlanet','plummer32','plummer128','lattice27'];
     const safe = validScenarios.indexOf(initialScenario) >= 0 ? initialScenario : 'figure8';
     // Wait briefly so the health poll fires first + the UI is settled
     setTimeout(() => { runScenario(safe); }, 600);
