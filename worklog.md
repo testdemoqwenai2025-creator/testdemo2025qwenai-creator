@@ -1907,3 +1907,34 @@ Phase 16 improvement suggestions (forward-looking):
 5. WebGL renderer for very large N — if Phase 16 adds Barnes-Hut and N>10k becomes feasible, switch to WebGL points + lines for rendering (would still stay zero-dep by writing raw GLSL shaders, ~300 LOC, but trades complexity for throughput).
 6. Per-body energy breakdown — currently the energy chart shows system-level total energy drift. Phase 16 could add per-body KE/PE breakdowns so users can see how energy is exchanged between bodies.
 7. Scenario sharing via URL — extend the URL hash to also encode the current scenario (#s=figure8&cam=...) so users can share a specific scenario + camera view combo.
+
+---
+Task ID: phase-16+17
+Agent: main (continuation)
+Task: Phase 16 (Performance Telemetry + Scientific Export) and Phase 17 (Sonification + Automated Tour)
+
+Work Log:
+- Read existing state: Phases 14 and 15 already committed. docs/ contains physics.js, db.js, middleware.js, routes.js, viz3d.js, app.js, styles.css, index.html. server.js + scripts/smoke-test.js + scripts/e2e-test.js.
+- Phase 16a — physics.js: added `energyBreakdown()` + `energyBreakdownTyped()` returning {ke, pe, total, virial}. Verified the two-body circular orbit satisfies the virial theorem 2KE + PE ≈ 0 (smoke test asserts |virial| < 1e-6).
+- Phase 16b — index.html: added a 9-card telemetry grid (FPS, bodies, steps, step time, throughput, energy drift, KE, PE, virial) and three export buttons (CSV / JSON / Energy CSV).
+- Phase 16c — styles.css: added `.telemetry-grid` + `.tele-card` rules (dark cards with hover accent border).
+- Phase 16d — app.js: wired telemetry state object `_tele`, FPS counter via `requestAnimationFrame` interception, `_recomputeEnergyBreakdown()` after every step, `_updateTelemetryCards()` ~2Hz. Added `_exportCSV()` / `_exportJSON()` / `_exportEnergyCSV()` with timestamped filenames + Blob download.
+- Phase 16e — smoke-test.js: added section 9 with 4 new assertions (energyBreakdown shape, total ≈ totalEnergy, virial theorem, typed path matches object path). PASS.
+- Phase 17a — sonify.js (new file, ~190 LOC): Web Audio API synth. 8-voice polyphonic body tones (sine oscillators, lowpass filter cutoff = speed, amplitude = mass, pitch = 1/r from COM). Close-encounter percussion (debounced sine ping). Drift-modulated drone (two detuned sawtooths at A2 + E3, lowpass filter, gain modulated by |ΔE|/|E₀|). Falls back to a no-op stub if AudioContext is unavailable (Node, old browsers).
+- Phase 17b — tour.js (new file, ~260 LOC): automated tour controller. Cycles through all 6 scenarios in a curated narrative order: twoBody → solarSystem → figure8 → binaryWithPlanet → plummer32 → lattice27. Each scenario shows narration (title + body + progress bar + step counter), creates the system, switches to 3D mode, runs the integrator, sonifies the live bodies ~60Hz via requestAnimationFrame, then advances after a 1.5s dwell. State machine: idle → playing ⇄ paused → idle. UI: ▶ Play / ⏸ Pause / ⏹ Stop / ⏭ Skip / 🔊 sound toggle.
+- Phase 17c — index.html: added the tour panel with control row + narration box (title, body, progress bar, step counter). Added `<script src="sonify.js">` + `<script src="tour.js">` in the right load order.
+- Phase 17d — styles.css: added `.tour-narration`, `.narration-title`, `.narration-body`, `.narration-progress`, `.narration-progress-bar`, `.narration-step`, `.tour-sound-toggle` rules.
+- Phase 17e — app.js: registered hooks for `window.NBodyTour` (createSystem, setVizMode, setBodies, getE0). Tour pushes live bodies back to app.js so the telemetry panel updates during the tour. Added `?tour=1` URL param to auto-start the tour on page load.
+- Phase 17f — smoke-test.js: added section 10 with 6 new assertions (sonify.js checks AudioContext, exposes NBodySonify with resume/start/stop/update, ping exposed; tour.js exposes NBodyTour with play/pause/stop/skip, has 6 ordered scenarios, calls NBodySonify.resume on user gesture). PASS.
+- Verified the dynamic backend boots on port 3100, serves /sonify.js (200) + /tour.js (200) + the new index.html, creates systems, steps them (drift=2.2e-8 for two-body Kepler), and serves /api/metrics in Prometheus format.
+
+Stage Summary:
+- Smoke test: 45/45 PASS (was 35 — added 10 Phase 16+17 assertions).
+- New files: docs/sonify.js (~190 LOC), docs/tour.js (~260 LOC).
+- Modified files: docs/physics.js (+35 LOC), docs/app.js (+200 LOC), docs/index.html (+85 LOC), docs/styles.css (+95 LOC), scripts/smoke-test.js (+60 LOC).
+- Zero new dependencies — sonification uses the browser-native Web Audio API. Tour uses existing fetch + requestAnimationFrame.
+- Phase 16 telemetry panel: 9 live metrics (FPS, N, steps, step time, throughput, drift, KE, PE, virial) + 3 export buttons (CSV, JSON, Energy CSV).
+- Phase 17 sound demo: automated tour through all 6 scenarios with synchronized polyphonic sonification (body tones, close-encounter percussion, drift-modulated drone) + on-screen narration.
+- Frontend endpoint (static): https://louispenev.github.io/nbody-fold-scala/
+- Frontend endpoint (auto-tour): https://louispenev.github.io/nbody-fold-scala/?tour=1
+- Local dynamic backend: PORT=3100 node server/server.js → http://localhost:3100/
