@@ -99,10 +99,18 @@ jobs:
       - name: Push dev schema to test DB
         run: npx prisma db push --schema=prisma/schema.dev.prisma
 
-      - name: Validate production schema (PostgreSQL syntax only)
+      - name: Validate production schema (PostgreSQL syntax)
+        env:
+          # prisma validate checks the URL protocol against the provider, so
+          # we need a postgres-shaped URL even though we won't connect to it.
+          DATABASE_URL: 'postgres://user:pass@localhost:5432/db?sslmode=require'
         run: npx prisma validate --schema=prisma/schema.prisma
 
       - name: Build Next.js app
-        run: npm run build
         env:
+          # Build needs a sqlite URL since the Prisma client was generated
+          # from the dev schema (sqlite). The actual connection is only
+          # opened at runtime, so a placeholder works for the build.
+          DATABASE_URL: 'file:/tmp/test.db'
           NEXT_TELEMETRY_DISABLED: '1'
+        run: npm run build
