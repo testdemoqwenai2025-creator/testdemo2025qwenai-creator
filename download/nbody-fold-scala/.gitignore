@@ -22,3 +22,9 @@ Thumbs.db
 *.bin
 *.h5
 results/*.tmp
+
+# Phase 13 — dynamic backend runtime artifacts
+server/data/
+node_modules/
+.env
+.env.local

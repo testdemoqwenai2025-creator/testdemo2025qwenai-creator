@@ -1,0 +1,50 @@
+# Fly.io config — nbody-fold-scala dynamic backend (Phase 13)
+#
+# One-click deploy: https://fly.io/launch?repo=https://github.com/louispenev/nbody-fold-scala
+#
+# Or via flyctl:
+#   flyctl launch --image node:20-slim --no-deploy
+#   flyctl secrets set NBODY_API_KEY=$(openssl rand -hex 24)
+#   flyctl deploy
+#
+# After deploy:
+#   1. Note the URL (e.g. https://nbody-fold-scala.fly.dev)
+#   2. Open https://louispenev.github.io/nbody-fold-scala/?backend=https://nbody-fold-scala.fly.dev
+#   3. The header badge should turn green within 5s.
+#
+# Free-tier caveats:
+#   - 3 shared-cpu-1x VMs with 256MB RAM (free)
+#   - 3GB persistent volume (free)
+#   - Auto-stop on inactivity (fast cold start ~2s)
+
+app = 'nbody-fold-scala'
+primary_region = 'iad'
+
+[build]
+  image = 'node:20-slim'
+
+[env]
+  PORT = '3000'
+  NBODY_REGION = 'iad'
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = 'requests'
+    hard_limit = 250
+    soft_limit = 20
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '256mb'
+
+# Persistent volume for server/data/db.json
+[[mounts]]
+  source = 'nbody_data'
+  destination = '/app/server/data'
+  initial_size = '1GB'

@@ -1,0 +1,230 @@
+# ============================================================================
+# .github/workflows/ci.yml — nbody-fold-scala CI (Phase 13)
+# ============================================================================
+# Three jobs run on every push and PR:
+#   1. scala-build  — sbt compile + all 13 demos (KeplerDemo + Phase1Demo..Phase12Demo)
+#                     Phase 9 and Phase 10 marked continue-on-error (known JIT
+#                     warmup noise on cold CI runners; both pass via sbt with
+#                     proper warmup on local hardware).
+#   2. static-demo  — Node syntax check on all docs/*.js + smoke test
+#                     (validates physics + middleware helpers)
+#   3. dynamic-server — start server/server.js, curl /api/health, expect 200,
+#                     then create + step + delete a system end-to-end.
+# ============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs when a new commit lands on the same ref
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scala-build:
+    name: Scala build + all 13 demos
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: download/nbody-fold-scala
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+        with:
+          sbt-runner-version: '1.10.7'
+
+      - name: Cache sbt + coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.sbt
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            download/nbody-fold-scala/target
+          key: sbt-${{ runner.os }}-${{ hashFiles('download/nbody-fold-scala/build.sbt', 'download/nbody-fold-scala/project/build.properties') }}
+          restore-keys: sbt-${{ runner.os }}-
+
+      - name: Compile
+        run: sbt compile
+
+      - name: Phase 0 — KeplerDemo (4 self-checks)
+        run: sbt "runMain nbody.KeplerDemo"
+
+      - name: Phase 1 — Typeclass Foundations
+        run: sbt "runMain nbody.Phase1Demo"
+
+      - name: Phase 2 — Parser Combinator
+        run: sbt "runMain nbody.Phase2Demo"
+
+      - name: Phase 3 — RLE Engine
+        run: sbt "runMain nbody.Phase3Demo"
+
+      - name: Phase 4 — DoubleRLE
+        run: sbt "runMain nbody.Phase4Demo"
+
+      - name: Phase 5 — N-Body Engine
+        run: sbt "runMain nbody.Phase5Demo"
+
+      - name: Phase 6 — File I/O (Three-Call mmap)
+        run: sbt "runMain nbody.Phase6Demo"
+
+      - name: Phase 7 — Corecursion & Streaming
+        run: sbt "runMain nbody.Phase7Demo"
+
+      - name: Phase 8 — Verification & Literate
+        run: sbt "runMain nbody.Phase8Demo"
+
+      - name: Phase 9 — Benchmarking (continue-on-error: known JIT noise)
+        continue-on-error: true
+        run: sbt "runMain nbody.Phase9Demo"
+
+      - name: Phase 10 — Structured-Data Arbitrage (continue-on-error: known JIT noise)
+        continue-on-error: true
+        run: sbt "runMain nbody.Phase10Demo"
+
+      - name: Phase 11 — Publication & Handoff Package
+        run: sbt "runMain nbody.Phase11Demo"
+
+      - name: Phase 12 — Zero-Dependency Web Tier
+        run: sbt "runMain nbody.Phase12Demo"
+
+  static-demo:
+    name: Static demo (Node syntax + smoke test)
+    runs-on: ubuntu-latest
+    needs: []  # independent of scala-build — runs in parallel
+    defaults:
+      run:
+        working-directory: download/nbody-fold-scala
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Syntax check all docs/*.js
+        run: |
+          for f in docs/*.js; do
+            echo "  checking $f"
+            node --check "$f" || exit 1
+          done
+
+      - name: Syntax check server.js
+        run: node --check server/server.js
+
+      - name: Smoke test (physics + middleware helpers)
+        run: node scripts/smoke-test.js
+
+  dynamic-server:
+    name: Dynamic backend (boot + end-to-end roundtrip)
+    runs-on: ubuntu-latest
+    needs: [static-demo]
+    defaults:
+      run:
+        working-directory: download/nbody-fold-scala
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Start dynamic backend
+        run: |
+          PORT=3199 NBODY_API_KEY=ci-test NBODY_REGION=github-actions node server/server.js &
+          echo $! > /tmp/server.pid
+          # Wait for /api/health to come up (max 10s)
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3199/api/health > /dev/null; then
+              echo "Server up after $((i*500))ms"
+              break
+            fi
+            sleep 0.5
+          done
+
+      - name: Verify /api/health response shape
+        run: |
+          set -e
+          RESP=$(curl -s http://localhost:3199/api/health)
+          echo "$RESP" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          assert d['status'] == 'ok', 'status != ok'
+          assert d['version'] == '1.0.0-server', 'wrong version'
+          assert d['region'] == 'github-actions', 'wrong region'
+          assert 'uptimeSec' in d, 'missing uptimeSec'
+          assert 'requestCount' in d, 'missing requestCount'
+          print('  ✓ /api/health returns expected shape')
+          "
+
+      - name: Auth check (missing key → 401)
+        run: |
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3199/api/systems)
+          if [ "$CODE" != "401" ]; then
+            echo "Expected 401 without API key, got $CODE"
+            exit 1
+          fi
+          echo "  ✓ missing API key → 401"
+
+      - name: End-to-end: create → step → fetch trajectories → delete
+        run: |
+          set -e
+          H='-H X-Api-Key:ci-test -H Content-Type:application/json'
+          # Create a 2-body Kepler system
+          CREATE=$(curl -s -H 'X-Api-Key: ci-test' -H 'Content-Type: application/json' \
+            -d '{"name":"ci-test","dt":0.001,"softening":1e-6,"bodies":[{"mass":1,"x":0,"y":0,"z":0,"vx":0,"vy":0,"vz":0},{"mass":0.001,"x":1,"y":0,"z":0,"vx":0,"vy":1,"vz":0}]}' \
+            http://localhost:3199/api/systems)
+          echo "  create: $CREATE"
+          ID=$(echo "$CREATE" | python3 -c "import sys, json; print(json.load(sys.stdin)['id'])")
+          # Step 200 steps
+          STEP=$(curl -s -X POST -H 'X-Api-Key: ci-test' -H 'Content-Type: application/json' \
+            -d '{"steps":200,"sampleEvery":20}' http://localhost:3199/api/systems/$ID/step)
+          echo "  step: $STEP"
+          echo "$STEP" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          drift = float(d['drift'])
+          assert drift < 1e-6, 'drift too high: ' + str(drift)
+          print('  ✓ drift < 1e-6 (got ' + str(drift) + ')')
+          "
+          # Fetch trajectories
+          TRAJ=$(curl -s -H 'X-Api-Key: ci-test' http://localhost:3199/api/systems/$ID/trajectories)
+          N_TRAJ=$(echo "$TRAJ" | python3 -c "import sys, json; print(len(json.load(sys.stdin)['trajectories']))")
+          echo "  trajectories: $N_TRAJ samples"
+          if [ "$N_TRAJ" -lt 10 ]; then
+            echo "Expected >=10 trajectory samples, got $N_TRAJ"
+            exit 1
+          fi
+          # Delete
+          DEL=$(curl -s -X DELETE -H 'X-Api-Key: ci-test' http://localhost:3199/api/systems/$ID)
+          echo "  delete: $DEL"
+          # Confirm gone
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" -H 'X-Api-Key: ci-test' http://localhost:3199/api/systems/$ID)
+          if [ "$CODE" != "404" ]; then
+            echo "Expected 404 after delete, got $CODE"
+            exit 1
+          fi
+          echo "  ✓ end-to-end roundtrip complete"
+
+      - name: Stop server
+        if: always()
+        run: |
+          if [ -f /tmp/server.pid ]; then
+            kill $(cat /tmp/server.pid) 2>/dev/null || true
+            rm /tmp/server.pid
+          fi

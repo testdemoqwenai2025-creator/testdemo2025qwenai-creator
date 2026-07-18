@@ -1,0 +1,20 @@
+{
+  "name": "nbody-fold-server",
+  "version": "1.0.0",
+  "description": "Zero-dependency Node.js dynamic backend for nbody-fold-scala. Reuses docs/physics.js + docs/middleware.js via a global.window shim. Serves /api/* (with /api/health for the live demo badge) and static files from ../docs/.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node ../scripts/smoke-test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/louispenev/nbody-fold-scala.git"
+  },
+  "license": "MIT",
+  "keywords": ["n-body", "simulation", "gravity", "scala", "javascript", "zero-dependency"]
+}

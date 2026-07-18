@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>nbody-fold — live demo</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">⊕</span>
+      <h1>nbody-fold-scala <small>· live demo</small></h1>
+    </div>
+    <!-- LIVE BACKEND HEALTH INDICATOR (Phase 13)
+         Instead of a static CI badge image, this pings /api/health every 5s
+         and shows real-time backend status. In static mode it shows "DEMO
+         MODE (in-browser)"; in dynamic mode (?backend=URL) it shows UP/DOWN
+         with latency, version, region, uptime, request count. -->
+    <div id="health-badge" class="health-badge unknown" title="Initializing…">
+      <span class="dot"></span>
+      <span class="label">checking…</span>
+      <span class="meta"></span>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Initial conditions</h2>
+      <div class="row">
+        <label>Preset
+          <select id="preset">
+            <option value="twoBody">two-body (Kepler)</option>
+            <option value="plummer32" selected>Plummer N=32</option>
+            <option value="plummer128">Plummer N=128</option>
+            <option value="lattice27">lattice 3³ = 27</option>
+          </select>
+        </label>
+        <label>dt
+          <input id="dt" type="number" step="0.001" value="0.01">
+        </label>
+        <label>softening
+          <input id="softening" type="number" step="0.0001" value="0.05">
+        </label>
+        <label>name
+          <input id="sysname" type="text" value="demo">
+        </label>
+        <button id="create">Create system</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Active systems</h2>
+      <table id="systems-table">
+        <thead>
+          <tr><th>id</th><th>name</th><th>N</th><th>steps</th><th>drift</th><th>actions</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <button id="refresh">Refresh</button>
+    </section>
+
+    <section class="panel">
+      <h2>Step the integrator</h2>
+      <div class="row">
+        <label>system id
+          <input id="step-id" type="number" min="1">
+        </label>
+        <label>steps
+          <input id="step-count" type="number" min="1" value="200">
+        </label>
+        <label>sample every
+          <input id="step-sample" type="number" min="1" value="10">
+        </label>
+        <button id="step-run">Run</button>
+      </div>
+    </section>
+
+    <section class="panel canvas-panel">
+      <h2>Trajectory + energy drift</h2>
+      <div class="canvas-wrap">
+        <canvas id="traj-canvas" width="640" height="320"></canvas>
+        <canvas id="energy-canvas" width="640" height="160"></canvas>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Audit log <small>(recent 50)</small></h2>
+      <pre id="audit-log">— no requests yet —</pre>
+    </section>
+  </main>
+
+  <footer>
+    <p>
+      Backend: <code id="backend-url">— detecting —</code>
+      · Mode: <code id="mode-label">—</code>
+      · <a href="https://github.com/louispenev/nbody-fold-scala" target="_blank">source</a>
+    </p>
+  </footer>
+
+  <!-- Scripts loaded in order: physics first (no deps), then db, middleware,
+       routes, then app.js (the main controller). -->
+  <script src="physics.js"></script>
+  <script src="db.js"></script>
+  <script src="middleware.js"></script>
+  <script src="routes.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

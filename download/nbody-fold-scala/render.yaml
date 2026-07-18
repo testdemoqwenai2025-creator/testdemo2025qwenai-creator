@@ -1,0 +1,42 @@
+# Render Blueprint — nbody-fold-scala dynamic backend (Phase 13)
+#
+# One-click deploy: https://render.com/deploy?repo=https://github.com/louispenev/nbody-fold-scala
+#
+# What this creates:
+#   - 1 Web Service (Node.js, free tier) running server/server.js
+#   - Auto-deploys from main branch on every push
+#   - Persistent disk for server/data/db.json (so created systems survive restarts)
+#
+# After deploy:
+#   1. Note the URL (e.g. https://nbody-fold-scala.onrender.com)
+#   2. Open https://louispenev.github.io/nbody-fold-scala/?backend=https://nbody-fold-scala.onrender.com
+#   3. The header badge should turn green within 5s.
+#
+# Free-tier caveats:
+#   - Service spins down after 15min of inactivity (~50s cold start on next request)
+#   - 750h/month of runtime (enough for one always-on instance)
+#   - Persistent disk: 1GB free
+
+services:
+  - type: web
+    name: nbody-fold-scala
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    rootDir: server
+    buildCommand: 'echo "no build step needed — zero-dependency"'
+    startCommand: 'node server.js'
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20.10.0
+      - key: NBODY_API_KEY
+        sync: false  # set in Render dashboard — generate a random secret
+      - key: NBODY_REGION
+        value: oregon
+    disks:
+      - name: nbody-data
+        mountPath: /opt/render/project/src/server/data
+        sizeGB: 1
