@@ -106,6 +106,33 @@
         <canvas id="traj-canvas" width="800" height="420"></canvas>
         <canvas id="energy-canvas" width="800" height="140"></canvas>
       </div>
+
+      <!-- Phase 19: live playback scrubber ====================================
+           A range slider that scrubs through the stored trajectory. The play
+           button animates bodies along their recorded paths in real time.
+           Drag the slider to seek to any point in the timeline. -->
+      <div class="playback-bar">
+        <button id="play-play"  title="Play / pause live playback (k)">▶</button>
+        <button id="play-stop"  title="Stop and rewind to start">⏹</button>
+        <input type="range" id="play-scrub" min="0" max="1000" value="0" step="1"
+               title="Scrub through the trajectory timeline">
+        <span class="play-time" id="play-time">0 / 0</span>
+        <label class="play-speed">
+          speed
+          <select id="play-speed">
+            <option value="0.25">0.25×</option>
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+            <option value="4">4×</option>
+          </select>
+        </label>
+        <label class="play-trail">
+          trail
+          <input type="range" id="play-trail" min="0" max="100" value="40" step="1">
+        </label>
+      </div>
+
       <p class="hint" id="viz-hint">2D projection (XY plane). Click 3D for a rotatable perspective view.</p>
     </section>
 
@@ -224,6 +251,7 @@
   <script src="viz3d.js"></script>
   <script src="sonify.js"></script>
   <script src="tour.js"></script>
+  <script src="playback.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -404,6 +404,133 @@ footer a:hover { text-decoration: underline; }
   color: var(--text-dim);
 }
 
+/* ── Phase 19: live playback scrubber ─────────────────────────────── */
+.playback-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #000000;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  flex-wrap: wrap;
+}
+.playback-bar button {
+  padding: 6px 10px;
+  font-size: 14px;
+  min-width: 38px;
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 700;
+}
+.playback-bar button:hover  { background: #79b8ff; }
+.playback-bar button:active { transform: translateY(1px); }
+.playback-bar button.playing {
+  background: var(--yellow);
+}
+
+/* The scrubber is the main interactive element — make it wide and obvious */
+#play-scrub {
+  flex: 1 1 300px;
+  min-width: 200px;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  background: linear-gradient(90deg,
+    var(--accent) 0%,
+    var(--accent) var(--scrub-pct, 0%),
+    #1f2937 var(--scrub-pct, 0%),
+    #1f2937 100%);
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+#play-scrub::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: #ffffff;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  cursor: grab;
+  box-shadow: 0 0 8px rgba(88,166,255,0.6);
+}
+#play-scrub::-webkit-slider-thumb:active { cursor: grabbing; transform: scale(1.15); }
+#play-scrub::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: #ffffff;
+  border: 2px solid var(--accent);
+  border-radius: 50%;
+  cursor: grab;
+  box-shadow: 0 0 8px rgba(88,166,255,0.6);
+}
+
+.play-time {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 70px;
+  text-align: center;
+}
+.play-speed,
+.play-trail {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.play-speed select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 3px 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.play-trail input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 80px;
+  height: 4px;
+  background: #1f2937;
+  border-radius: 2px;
+  outline: none;
+}
+.play-trail input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.play-trail input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .playback-bar { gap: 6px; padding: 8px; }
+  #play-scrub { flex: 1 1 100%; order: 5; }
+  .play-speed, .play-trail { font-size: 9px; }
+}
+
 /* ── Phase 18: keyboard hint styling ──────────────────────────────── */
 kbd {
   display: inline-block;

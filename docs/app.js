@@ -357,8 +357,35 @@
       const sysJ = await sysRes.json();
       _currentBodies = (sysJ.bodies || []).map(b => ({ x: b.x, y: b.y, z: b.z, mass: b.mass }));
     } catch (_) { _currentBodies = []; }
+
+    // Phase 19: feed the trajectory into the playback engine so the
+    // scrubber + play button can animate it. Also do the initial static
+    // render so the canvas isn't blank.
+    if (window.NBodyPlayback) {
+      window.NBodyPlayback.setTrajectory(_currentTrajectoriesByBody);
+    }
     renderTrajectory(_currentTrajectoriesByBody);
     renderEnergy(_currentTrajectory);
+  }
+
+  // ── Phase 19: playback hook ──────────────────────────────────────────
+  // The playback engine calls onRender(state) every frame with the current
+  // body positions + trailing samples. We dispatch to the appropriate
+  // renderer (2D or 3D) using the trail as the "trajectory" and the live
+  // positions as the "bodies" — this reuses the additive-blending neon
+  // pop code path from Phase 18.
+  if (window.NBodyPlayback) {
+    window.NBodyPlayback.onRender = function (state) {
+      // Override _currentBodies with the live positions so the 3D renderer's
+      // body dots are at the right place in the timeline.
+      _currentBodies = state.positions.map(p => ({
+        x: p.x, y: p.y, z: p.z, mass: p.mass
+      }));
+      // Render the trail (this is what shows the trajectory)
+      renderTrajectory(state.trails);
+      // Update the energy chart marker if we have the data
+      // (Not strictly required, but nice to show progress on the energy chart too)
+    };
   }
 
   function renderTrajectory(rows) {

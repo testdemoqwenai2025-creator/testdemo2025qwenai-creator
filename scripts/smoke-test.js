@@ -50,12 +50,14 @@ const sandbox = {
       textContent: '', value: '', className: '',
       classList: { add: () => {}, remove: () => {}, toggle: () => {} },
       addEventListener: () => {},
-      style: {}, checked: false, disabled: false,
+      style: { setProperty: () => {} },
+      checked: false, disabled: false,
       textContent_set: () => {}, appendChild: () => {}
     }),
     createElement: () => ({
       className: '', innerHTML: '', insertBefore: () => {},
-      appendChild: () => {}, style: {}, getContext: () => null,
+      appendChild: () => {}, style: { setProperty: () => {} },
+      getContext: () => null,
       width: 0, height: 0
     }),
     readyState: 'complete',
@@ -83,7 +85,8 @@ try {
   vm.runInContext(load('viz3d.js'),    sandbox);
   vm.runInContext(load('sonify.js'),   sandbox);
   vm.runInContext(load('tour.js'),     sandbox);
-  console.log('  all 7 modules loaded');
+  vm.runInContext(load('playback.js'), sandbox);
+  console.log('  all 8 modules loaded');
 } catch (e) {
   console.log('  [FAIL] module load error:', e.message);
   process.exit(1);
@@ -242,6 +245,44 @@ const cssSrc = load('styles.css');
 assert(cssSrc.indexOf('.canvas-panel') >= 0, 'canvas-panel CSS rule exists');
 assert(/\.canvas-panel\s*\{[^}]*background:\s*#000000/m.test(cssSrc),
        'canvas-panel background is pure #000000');
+
+// ── Test 11: Phase 19 — playback module + scrubber ──────────────────────
+console.log('\n--- Test 11: Phase 19 playback module ---');
+const PB = sandbox.window.NBodyPlayback;
+assert(typeof PB === 'object', 'NBodyPlayback global exists');
+assert(typeof PB.setTrajectory === 'function', 'setTrajectory() exported');
+assert(typeof PB.play  === 'function', 'play() exported');
+assert(typeof PB.pause === 'function', 'pause() exported');
+assert(typeof PB.stop  === 'function', 'stop() exported');
+assert(typeof PB.seek  === 'function', 'seek() exported');
+assert(typeof PB.renderAt === 'function', 'renderAt() exported');
+assert(typeof PB.setSpeed === 'function', 'setSpeed() exported');
+assert(typeof PB.setTrailFrac === 'function', 'setTrailFrac() exported');
+assert(typeof PB.isPlaying === 'function', 'isPlaying() exported');
+
+// Verify setTrajectory accepts the byBody shape
+let noThrowPB = true;
+try {
+  PB.setTrajectory([
+    { bodyId: 0, samples: [{x:0,y:0,z:0},{x:1,y:1,z:0},{x:2,y:0,z:0}] },
+    { bodyId: 1, samples: [{x:1,y:0,z:0},{x:0,y:1,z:0},{x:-1,y:0,z:0}] }
+  ]);
+  PB.seek(0.5);
+  PB.setSpeed(2);
+  PB.setTrailFrac(0.5);
+  PB.pause();
+  PB.stop();
+} catch (e) { noThrowPB = false; }
+assert(noThrowPB, 'playback API does not throw on basic operations');
+
+// Verify the HTML has the scrubber + play button
+const htmlSrc = load('index.html');
+assert(htmlSrc.indexOf('id="play-scrub"') >= 0, 'playback scrubber in HTML');
+assert(htmlSrc.indexOf('id="play-play"')  >= 0, 'play button in HTML');
+assert(htmlSrc.indexOf('id="play-stop"')  >= 0, 'stop button in HTML');
+assert(htmlSrc.indexOf('id="play-speed"') >= 0, 'speed selector in HTML');
+assert(htmlSrc.indexOf('id="play-trail"') >= 0, 'trail length slider in HTML');
+assert(htmlSrc.indexOf('playback.js') >= 0, 'playback.js script tag in HTML');
 
 // ── Summary ──────────────────────────────────────────────────────────────
 console.log('\n=========================');
