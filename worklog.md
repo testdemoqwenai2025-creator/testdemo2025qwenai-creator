@@ -1938,3 +1938,27 @@ Stage Summary:
 - Frontend endpoint (static): https://louispenev.github.io/nbody-fold-scala/
 - Frontend endpoint (auto-tour): https://louispenev.github.io/nbody-fold-scala/?tour=1
 - Local dynamic backend: PORT=3100 node server/server.js → http://localhost:3100/
+
+---
+Task ID: phase-18-visual-pop
+Agent: main (continuation)
+Task: Address user feedback 'background is not black on the simulation, and also doesn't pop out as agreed before'
+
+Work Log:
+- Inspected docs/{index.html, styles.css, app.js, viz3d.js, tour.js, sonify.js}.
+- Diagnosed root cause of 'not black': the canvas itself was #000, but the surrounding .canvas-panel used #0d1117 (dark blue-grey) and the canvas had a 1px #30363d border — so the simulation area read as 'dark grey frame around black', not 'pure deep-space black'.
+- Diagnosed root cause of 'doesn't pop': the 2D + 3D renderers used default 'source-over' blending. Overlapping trail segments and glow halos just stacked opaquely instead of adding their RGB — no neon bloom effect.
+- Fixed styles.css: .canvas-panel + .canvas-wrap → background #000000, canvas border removed, replaced with subtle inset accent glow + outer bloom box-shadow.
+- Fixed app.js renderTrajectory2D: switched to globalCompositeOperation='lighter' (additive). Each trajectory now has 3 passes — wide low-alpha bloom underlay (lineWidth=6), bright core stroke (lineWidth=1.8, hsl 90%/65%), and a 22px outer + 9px mid radial gradient glow at the head. Restored to 'source-over' before drawing the crisp white core dot.
+- Fixed viz3d.js render(): same additive blending treatment for the 3D mode. Each trail gets a wide bloom pass (lineWidth=5, alpha 0.10→0.30) + bright core stroke (lineWidth=1.6, alpha 0.30→1.0). Body points get a two-layer bloom (radius*4.5 outer at 0.55 alpha + radius*2.2 mid at 0.95 alpha) before the white core. Star field stays subtle (drawn with normal blending before the switch).
+- Fixed sonify.js no-AudioContext stub: now mirrors the full public API (isEnabled/setEnabled) so tour.js doesn't crash on browsers without Web Audio.
+- Rewrote scripts/smoke-test.js: previous version was using stale API names from an older physics.js era (generateInitialConditions, sys.totalEnergy(softening), sys.momentumMagnitude(), MW.hashIp). Updated to the actual API (twoBodyCircular, plummerSphere, MutableBodySystem.energy(), NBodyMiddleware.fnv1a, etc.). Added Phase 18 visual-pop assertions (additive blending present in app.js + viz3d.js, canvas-panel background is #000000). Smoke test now 60/60 PASS (was failing outright before).
+- Added scripts/serve-docs.js + scripts/start-server.sh: tiny zero-dependency static file server for docs/ so the demo can be served locally without needing the full server/server.js stack.
+- Committed: 5773bb3 'Phase 18 visual pop — pure black stage + additive neon bloom'.
+- Pushed to GitHub main: 299a035..5773bb3 main -> main (PAT-authenticated).
+
+Stage Summary:
+- Smoke test: 60/60 PASS (was failing on stale API names).
+- Visual: simulation now floats in true #000000 deep-space black with no frame; trajectories glow with additive neon bloom (overlapping colors brighten into white); body positions have layered bloom halos + crisp white cores.
+- Local endpoint live: http://localhost:3100/ and http://localhost:3100/?tour=1
+- GitHub Pages will update shortly at the repo's Pages URL.
