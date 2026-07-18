@@ -1992,3 +1992,112 @@ Stage Summary:
 - Local endpoint: http://localhost:3100/ (PID via scripts/start-server.sh)
 - Auto-tour: http://localhost:3100/?tour=1
 - GitHub: 7d0c9a3 pushed to main
+
+---
+Task ID: phase-20-verify-push
+Agent: main (continuation)
+Task: Phase 20 — verify locally + push the two unpushed commits (5c71e3b Phase 20
+code + 7761190 screenshots) to origin/main so the live endpoint is publicly
+reachable. User flagged "you haven't completed the tasks, is correct assumption"
+when only the local commits existed.
+
+Work Log:
+- Inspected git state: `git log origin/main..HEAD --oneline` showed TWO
+  unpushed commits:
+    5c71e3b Phase 20 — Live Space Data Integration (NASA APOD + JPL planet
+            ephemeris + ISS tracker)  [7 files, +1263/-7 LOC]
+    7761190 01eff1a6-74dd-4c21-95d7-3e5878068575  [6 screenshots]
+  Remote origin/main was at 7d0c9a3 (Phase 19) — Phase 20 was committed
+  locally but never pushed.
+- Re-read `docs/spacedata.js` (369 LOC) — full Phase 20 implementation:
+    (1) NASA APOD: fetch + 6-hour localStorage cache + 2024 eclipse fallback
+    (2) JPL planet ephemeris: 8 planets from Standish J2000 elements,
+        propagated to today, converted via Kepler's equation + 3 rotation
+        matrices, scaled to sim units (AU/day → AU/(year/2π))
+    (3) ISS live tracker: polls wheretheiss.at every 5s, renders on
+        equirectangular world map with footprint circle
+- Ran `node scripts/smoke-test.js` — 136/136 PASS, 0 fail. Covers:
+    - All 8 planet names + colors + masses baked in
+    - Standish JPL source citation + J2000 date + GM_sun constant
+    - Keplerian → Cartesian conversion (Newton-Raphson Kepler solver)
+    - Earth @ J2000: |r|=0.982 AU, longitude 100.82° (real: 100.46°)
+    - Earth @ J2000 |v| = 1.0166 sim units (≈ 1.0 expected)
+    - Neptune @ J2000 |r| = 30.12 AU (≈ 30 expected)
+    - Solar system conserves energy over 100 steps (drift 6.06e-11)
+    - All Phase 20 UI elements exist in HTML + CSS + app.js wiring
+- Started local server via `bash scripts/start-server.sh` → PID 32588,
+  listening on http://localhost:3100/, all 5 Phase 20 assets return HTTP 200.
+- Probed NASA APOD API directly from sandbox:
+    `curl 'https://api.nasa.gov/planetary/apod?api_key=DEMO_KEY&thumbs=true'`
+    → 200 OK, today's entry: 'Shadow and Rainbow', 2026-07-18
+  (wheretheiss.at timed out from sandbox network — expected; the frontend
+   hits it directly from the user's browser, with graceful fallback.)
+- Used `agent-browser` to render the live page:
+    - viewport 1600x1000
+    - DOM probe: `#apod-card`, `#space-data-panel`, `#iss-canvas` all present
+    - Section title rendered: 'Live space data Phase 20 · NASA APOD · JPL
+      planet ephemeris · live ISS tracker'
+    - APOD image loaded: src=https://apod.nasa.gov/apod/image/2607/ShadowandRainbow_Lloschiavo1024.jpg
+      naturalWidth=1024, complete=true (today's NASA image actually rendered)
+    - APOD badge: 'cached' (6-hour localStorage cache from prior session,
+      behaves correctly)
+    - Planet legend: 8 dots rendered (one per planet)
+    - ISS canvas: 360x180 (equirectangular world map dimensions)
+    - 'Load live planets & simulate' button present and clickable
+    - 'Live Solar System (today)' scenario button present in scenario library
+    - All 8 planet names visible in body text: Earth, Mercury, Venus, Mars,
+      Jupiter, Saturn, Uranus, Neptune
+    - Called `window.NBodySpaceData.computePlanets(new Date())` directly in
+      browser console → returned 9 bodies (Sun + 8 planets) with realistic
+      distances: Sun 0.006 AU (barycentric offset), Mercury 0.428 AU
+      (real 0.387), Venus 0.730 AU (real 0.723)
+    - Clicked 'Load live planets & simulate' — button handler fired
+    - Opened shareable URL `#s=solarSystemLive` — telemetry updated to
+      `tele-steps: 3000`, confirming the integrator processed 3000 steps
+      for the live solar system scenario
+- Captured 3 verification screenshots:
+    /home/z/my-project/download/phase20-verify-final.png
+    /home/z/my-project/download/phase20-verify-live.png
+    /home/z/my-project/download/phase20-verify-shareable.png
+- Attempted `git push origin main` → 'could not read Username for
+  https://github.com' (no PAT available in this sandbox). The three PATs
+  used in prior sessions (per worklog Task IDs 3, 4, 5) were all exposed in
+  chat history and the worklog itself instructs the user to revoke them.
+  A fresh PAT is required from the user to push.
+- The push command for the user to run, once a fresh PAT is issued:
+    GH_TOKEN=ghp_FRESH_TOKEN bash /home/z/my-project/scripts/push-to-github.sh
+  (Or, simpler — `git push https://x-access-token:ghp_FRESH_TOKEN@github.com/testdemoqwenai2025-creator/testdemo2025qwenai-creator.git main:main`)
+
+Stage Summary:
+- **Code state**: COMPLETE. Phase 20 is fully implemented (1263 LOC across
+  7 files), 136/136 smoke tests pass, and the live endpoint renders
+  correctly in a real headless browser — today's NASA APOD image loads,
+  the live planet ephemeris computes correct positions for all 9 bodies,
+  and the shareable `#s=solarSystemLive` URL auto-runs the integrator.
+- **Local commits**: 2 unpushed (5c71e3b + 7761190).
+- **GitHub push**: BLOCKED on a fresh PAT from the user. All previously
+  used tokens are compromised (exposed in chat history).
+- **Live endpoint** (once pushed): https://testdemoqwenai2025-creator.github.io/testdemo2025qwenai-creator/
+  with deep-link `?tour=1` for the automated tour and `#s=solarSystemLive`
+  for the live solar system scenario.
+- **Improvement suggestions for Phase 21+**:
+    1. Server-side NASA proxy — keeps a real NASA API key server-side
+       (DEMO_KEY is rate-limited to ~30 req/hr/IP and shared across all
+       GitHub Pages visitors). A 20-line Node proxy on Render would lift
+       this to 1000 req/hr.
+    2. JPL Horizons REST integration — replace the linear-drift Standish
+       approximation with direct queries to https://ssd.jpl.nasa.gov/api/horizons.api
+       for sub-arcsecond accuracy (vs ~0.4° error we currently have at
+       Earth). The current approximation is fine for visualization but
+       won't survive a perihelion-passage check.
+    3. TLE-driven ISS propagation — currently we just plot the live ISS
+       lat/lon as polled. Adding SGP4 propagation (with a baked-in recent
+       TLE) would let users scrub the ISS forward/backward in time and
+       see the ground track evolve.
+    4. Live asteroid/comet layer — add 433 Eros, 1P/Halley, etc. from
+       JPL Small-Body Database. Would make the 'live solar system' view
+       feel complete with one or two minor bodies threading the planets.
+    5. Moon — add Earth's Moon as a 10th body. Tricky because its
+       heliocentric orbit is wiggly (radius ~0.0026 AU around Earth),
+       but the visual payoff of seeing the Moon actually orbit Earth
+       while Earth orbits the Sun is high.
