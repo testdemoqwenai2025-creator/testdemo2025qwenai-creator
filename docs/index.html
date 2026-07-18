@@ -25,9 +25,86 @@
   </header>
 
   <main>
+    <!-- Phase 20: Live Space Data Integration ============================
+         Three subsystems, all live (with graceful fallbacks):
+         (1) NASA APOD — fetches today's Astronomy Picture of the Day
+         (2) Live Solar System — uses REAL JPL planet positions propagated
+             to today, seeded into the N-body integrator
+         (3) ISS tracker — polls wheretheiss.at every 5 s for the live ISS
+             position, rendered on an equirectangular world map -->
+    <section class="panel space-data-panel">
+      <h2>Live space data <small class="hint-inline">Phase 20 · NASA APOD · JPL planet ephemeris · live ISS tracker</small></h2>
+
+      <div class="space-data-grid">
+
+        <!-- Card 1: NASA APOD -->
+        <div class="space-card apod-card">
+          <div class="space-card-header">
+            <span class="space-card-title">📡 NASA APOD</span>
+            <span class="space-card-badge" id="apod-badge">loading…</span>
+          </div>
+          <div class="apod-body">
+            <a id="apod-link" href="#" target="_blank" rel="noopener">
+              <img id="apod-img" alt="Astronomy Picture of the Day" src="">
+            </a>
+            <div class="apod-text">
+              <div class="apod-date" id="apod-date">—</div>
+              <div class="apod-title" id="apod-title">Loading…</div>
+              <div class="apod-explanation" id="apod-explanation"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 2: Live Solar System -->
+        <div class="space-card live-solar-card">
+          <div class="space-card-header">
+            <span class="space-card-title">🪐 Live Solar System</span>
+            <span class="space-card-badge" id="live-ss-badge">J2000 ready</span>
+          </div>
+          <p class="space-card-desc">
+            Uses <strong>real JPL Keplerian elements</strong> (Standish 1992, JPL)
+            propagated to today's date. The 8 planets start at their actual sky
+            positions, with their actual orbital velocities — the integrator then
+            simulates their orbits forward in time. This is real astronomical data.
+          </p>
+          <div class="space-card-actions">
+            <button id="live-ss-run" class="primary-btn">▶ Load live planets & simulate</button>
+            <label class="planet-date-label">
+              epoch
+              <input id="live-ss-date" type="date">
+            </label>
+          </div>
+          <div class="planet-legend" id="planet-legend"></div>
+        </div>
+
+        <!-- Card 3: ISS tracker -->
+        <div class="space-card iss-card">
+          <div class="space-card-header">
+            <span class="space-card-title">🛰 ISS live tracker</span>
+            <span class="space-card-badge" id="iss-badge">connecting…</span>
+          </div>
+          <div class="iss-map-wrap">
+            <canvas id="iss-canvas" width="360" height="180"></canvas>
+            <div class="iss-stats" id="iss-stats">
+              <div>lat <strong>—</strong></div>
+              <div>lon <strong>—</strong></div>
+              <div>alt <strong>—</strong> km</div>
+              <div>vel <strong>—</strong> km/s</div>
+            </div>
+          </div>
+          <p class="space-card-desc small">
+            Live position from <code>wheretheiss.at</code> (free, no key). Updates every 5 s.
+            The dot is the ISS right now; the circle is its horizon footprint.
+          </p>
+        </div>
+
+      </div>
+    </section>
+
     <section class="panel">
       <h2>Scenario library <small class="hint-inline">Phase 15 · one-click presets</small></h2>
       <div class="scenario-row">
+        <button class="scenario-btn live-data-btn" data-scenario="solarSystemLive">🪐 Live Solar System (today)</button>
         <button class="scenario-btn" data-scenario="solarSystem">☀ Solar System</button>
         <button class="scenario-btn" data-scenario="figure8">∞ Figure-8</button>
         <button class="scenario-btn" data-scenario="binaryWithPlanet">⋆ Binary + Planet</button>
@@ -35,7 +112,7 @@
         <button class="scenario-btn" data-scenario="plummer32">●● Plummer N=32</button>
         <button class="scenario-btn" data-scenario="lattice27">▦ Lattice 3³</button>
       </div>
-      <p class="hint" id="scenario-hint">Click a preset to auto-create a system + run 300 steps + load the 3D trajectory. The Figure-8 is the famous Chenciner–Montgomery choreography — three equal masses tracing the same figure-8 curve.</p>
+      <p class="hint" id="scenario-hint">Click a preset to auto-create a system + run 300 steps + load the 3D trajectory. The <strong>🪐 Live Solar System</strong> preset uses real JPL planet positions for today's date — see the Live Space Data panel above.</p>
     </section>
 
     <section class="panel">
@@ -43,6 +120,7 @@
       <div class="row">
         <label>Preset
           <select id="preset">
+            <option value="solarSystemLive">🪐 Live Solar System (JPL ephemeris)</option>
             <option value="twoBody">two-body (Kepler)</option>
             <option value="solarSystem">Solar System (Phase 15)</option>
             <option value="figure8">Figure-8 (Phase 15)</option>
@@ -241,9 +319,11 @@
     </p>
   </footer>
 
-  <!-- Scripts loaded in order: physics first (no deps), then db, middleware,
+  <!-- Scripts loaded in order: spacedata (no deps, provides planet ephemeris),
+       physics (uses spacedata for solarSystemLive), then db, middleware,
        routes, viz3d (3D engine), sonify (Phase 17 Web Audio), tour (Phase 17
-       automated tour controller), then app.js (the main controller). -->
+       automated tour controller), playback (Phase 19 scrubber), then app.js. -->
+  <script src="spacedata.js"></script>
   <script src="physics.js"></script>
   <script src="db.js"></script>
   <script src="middleware.js"></script>

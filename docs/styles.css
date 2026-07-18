@@ -545,6 +545,230 @@ kbd {
   line-height: 1.2;
 }
 
+/* ── Phase 20: Live Space Data panel ─────────────────────────────── */
+.space-data-panel {
+  background: linear-gradient(180deg, #0d1117 0%, #060a10 100%);
+  border-color: #1f2937;
+}
+.space-data-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 14px;
+  margin-top: 8px;
+}
+.space-card {
+  background: rgba(13, 17, 23, 0.85);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 280px;
+  position: relative;
+  overflow: hidden;
+}
+/* Subtle starfield-like accent in the top corner of each card */
+.space-card::before {
+  content: '';
+  position: absolute;
+  top: -40px;
+  right: -40px;
+  width: 120px;
+  height: 120px;
+  background: radial-gradient(circle, rgba(88,166,255,0.12) 0%, transparent 70%);
+  pointer-events: none;
+}
+.space-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 12px;
+  border-bottom: 1px solid rgba(48, 54, 61, 0.5);
+  padding-bottom: 8px;
+  position: relative;
+  z-index: 1;
+}
+.space-card-title {
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.space-card-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(110, 118, 129, 0.18);
+  color: var(--text-dim);
+  border: 1px solid rgba(110, 118, 129, 0.3);
+  white-space: nowrap;
+  transition: all 0.3s ease;
+}
+.space-card-badge.live {
+  background: rgba(63, 185, 80, 0.15);
+  color: var(--green);
+  border-color: var(--green);
+}
+.space-card-badge.cached {
+  background: rgba(210, 153, 34, 0.12);
+  color: var(--yellow);
+  border-color: var(--yellow);
+}
+.space-card-badge.error {
+  background: rgba(248, 81, 73, 0.12);
+  color: var(--red);
+  border-color: var(--red);
+}
+.space-card-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 0;
+  line-height: 1.55;
+}
+.space-card-desc.small { font-size: 11px; line-height: 1.5; }
+.space-card-desc strong { color: var(--text); font-weight: 500; }
+
+/* ── APOD card ── */
+.apod-body {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+.apod-body img {
+  width: 140px;
+  height: 140px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+  background: #000;
+  border: 1px solid var(--border);
+  display: block;
+}
+.apod-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+}
+.apod-date {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.apod-title {
+  font-weight: 600;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.3;
+}
+.apod-explanation {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  line-height: 1.45;
+  max-height: 100px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.apod-explanation::-webkit-scrollbar { width: 4px; }
+.apod-explanation::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── Live Solar System card ── */
+.live-solar-card .space-card-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.planet-date-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+}
+.planet-date-label input {
+  background: #000;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 4px 6px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.primary-btn {
+  background: linear-gradient(180deg, #1f6feb 0%, #1158c7 100%);
+  border: 1px solid #388bfd;
+  color: #fff;
+  font-weight: 600;
+  font-size: 12px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: var(--sans);
+}
+.primary-btn:hover {
+  background: linear-gradient(180deg, #388bfd 0%, #1f6feb 100%);
+  box-shadow: 0 0 12px rgba(56, 139, 253, 0.4);
+}
+.primary-btn:active { transform: translateY(1px); }
+.planet-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 6px;
+}
+.planet-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.planet-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: 0 0 4px currentColor;
+}
+
+/* ── ISS tracker card ── */
+.iss-map-wrap {
+  position: relative;
+  margin-top: 4px;
+}
+#iss-canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #000;
+}
+.iss-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 8px 4px 0;
+}
+.iss-stats strong {
+  color: var(--accent);
+  font-weight: 500;
+  margin-left: 6px;
+}
+
 /* ── Phase 18: mobile responsive layout ──────────────────────────── */
 @media (max-width: 720px) {
   .topbar {
@@ -587,8 +811,18 @@ kbd {
   .tour-narration { padding: 12px; min-height: 130px; }
   .narration-title { font-size: 14px; }
   .narration-body { font-size: 12px; }
+  /* Phase 20: stack the 3 space-data cards on mobile */
+  .space-data-grid { grid-template-columns: 1fr; }
+  .apod-body { flex-direction: column; }
+  .apod-body img { width: 100%; height: 180px; }
   /* Mobile: hide the "tip" paragraph to save vertical space */
   .hint { font-size: 10px; }
   /* Touch-friendly: disable the grab cursor (confusing on touch) */
   canvas { cursor: default; }
+}
+
+@media (min-width: 721px) and (max-width: 1024px) {
+  /* Tablet: 2 columns instead of 3 for the space-data grid */
+  .space-data-grid { grid-template-columns: 1fr 1fr; }
+  .iss-card { grid-column: 1 / -1; }
 }

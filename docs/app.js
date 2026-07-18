@@ -238,6 +238,7 @@
     let bodies;
     if (preset === 'twoBody')           bodies = P.twoBodyCircular({ m: 1e-3 });
     else if (preset === 'solarSystem')      bodies = P.solarSystem();
+    else if (preset === 'solarSystemLive')  bodies = P.solarSystemLive();  // Phase 20: real JPL positions
     else if (preset === 'figure8')          bodies = P.figure8();
     else if (preset === 'binaryWithPlanet') bodies = P.binaryWithPlanet();
     else if (preset === 'plummer32')        bodies = P.plummerSphere(32, 1);
@@ -582,7 +583,7 @@
     // If a scenario is requested in the URL, run it (overrides the default
     // figure8 auto-run, but only if noAuto or tour=1 isn't set)
     if (s.s && !urlParams.get('noAuto') && !urlParams.get('tour')) {
-      const valid = ['twoBody','solarSystem','figure8','binaryWithPlanet','plummer32','plummer128','lattice27'];
+      const valid = ['twoBody','solarSystem','solarSystemLive','figure8','binaryWithPlanet','plummer32','plummer128','lattice27'];
       if (valid.indexOf(s.s) >= 0) {
         setTimeout(() => runScenario(s.s), 600);
         return true;
@@ -677,6 +678,7 @@
   // One-click presets: create system + run 300 steps + load + switch to 3D.
   // Scenario-specific step counts + sample intervals tuned per scenario.
   const SCENARIO_PARAMS = {
+    solarSystemLive:  { name: 'live-solar',       dt: 0.002, softening: 0.0001, steps: 3000, sampleEvery: 10 },
     solarSystem:      { name: 'solar-system',     dt: 0.005, softening: 0.001, steps: 1500, sampleEvery: 10 },
     figure8:          { name: 'figure-8',         dt: 0.001, softening: 0.0,   steps: 6326, sampleEvery: 20 },  // T ≈ 6.3259
     binaryWithPlanet: { name: 'binary-planet',    dt: 0.005, softening: 0.001, steps: 2000, sampleEvery: 10 },
@@ -759,7 +761,21 @@
     }
   });
   document.querySelectorAll('.scenario-btn').forEach(btn => {
-    btn.addEventListener('click', () => runScenario(btn.dataset.scenario));
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.scenario;
+      if (key === 'solarSystemLive') {
+        // Phase 20: the live-solar scenario uses real JPL planet positions
+        // and needs its own custom run handler (because it has to set the
+        // epoch, build bodies from NBodySpaceData, etc.).
+        if (typeof _runLiveSolarSystem === 'function') {
+          _runLiveSolarSystem();
+        } else {
+          runScenario(key);  // fallback if Phase 20 isn't initialized
+        }
+      } else {
+        runScenario(key);
+      }
+    });
   });
 
   // Initial state
@@ -929,6 +945,339 @@
   const _exportEnergyBtn = $('export-energy');
   if (_exportEnergyBtn) _exportEnergyBtn.addEventListener('click', _exportEnergyCSV);
 
+  // ── Phase 20: Live Space Data Integration ──────────────────────────────
+  // Three subsystems wired into the UI:
+  //   (1) NASA APOD       — auto-loads on page load, refresh button
+  //   (2) Live Solar System — button → loads real JPL planet positions
+  //   (3) ISS live tracker — starts polling every 5 s on page load
+  //
+  // All three degrade gracefully when offline (cached/baked-in fallbacks).
+  // Declared at IIFE top-level scope so the scenario button listener (above)
+  // can see them — function declarations inside `if` blocks are block-scoped
+  // in strict mode.
+  const SD = window.NBodySpaceData;
+  const SPACE_DATA_ENABLED = !!SD;
+  // Track which scenarios are valid for the URL hash + auto-run
+  const _liveScenarioKey = 'solarSystemLive';
+  let _issStop = null;
+  let _issLastPos = null;
+
+  function _runLiveSolarSystem() {
+    return _runLiveSolarSystemImpl();
+  }
+
+  async function _runLiveSolarSystemImpl() {
+    if (!SPACE_DATA_ENABLED) {
+      appendAuditLog({ method: 'UI', path: '/spacedata/live-solar', status: 0, ms: 0,
+                       meta: 'spacedata.js not loaded' });
+      return;
+    }
+    const badge = $('live-ss-badge');
+    const btn   = $('live-ss-run');
+    if (badge) { badge.textContent = 'loading JPL data…'; badge.className = 'space-card-badge'; }
+    if (btn) btn.disabled = true;
+
+    try {
+      // Parse the chosen epoch (or default to now)
+      const dateInput = $('live-ss-date');
+      let epoch = new Date();
+      if (dateInput && dateInput.value) {
+        epoch = new Date(dateInput.value + 'T12:00:00Z');
+      }
+      // Compute real planet positions
+      const planets = SD.computePlanets(epoch);
+      if (!planets || planets.length < 9) throw new Error('insufficient planet data');
+
+      // Update the IC form so the user sees what's running
+      const presetSel = $('preset');
+      if (presetSel) presetSel.value = _liveScenarioKey;
+      const dtInp = $('dt');       if (dtInp) dtInp.value = 0.002;
+      const softInp = $('softening'); if (softInp) softInp.value = 0.0001;
+      const nameInp = $('sysname');   if (nameInp) nameInp.value = 'live-solar-' + epoch.toISOString().slice(0,10);
+      const stepsInp = $('step-count'); if (stepsInp) stepsInp.value = 3000;
+      const sampleInp = $('step-sample'); if (sampleInp) sampleInp.value = 10;
+
+      // Persist in URL hash so refresh/share restores the live scenario
+      _syncUrlState({ s: _liveScenarioKey });
+
+      // Create the system (createSystem picks up solarSystemLive preset)
+      const id = await createSystem(_liveScenarioKey);
+      if (!id) throw new Error('create failed');
+
+      // Auto-switch to 3D for the full solar-system view
+      setVizMode(true);
+
+      // Run the integrator — 3000 steps × dt=0.002 = 6 sim-time-units ≈ 1 year
+      // (Earth completes one orbit; Jupiter moves ~30°; Neptune barely moves.)
+      if (IS_DYNAMIC) openLiveStream(id);
+      const res = await fetch('/api/systems/' + id + '/step', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Api-Key': 'demo' },
+        body: JSON.stringify({ steps: 3000, sampleEvery: 10 })
+      });
+      const j = await res.json();
+      if (j.drift !== undefined) {
+        appendAuditLog({ method: 'POST', path: '/api/systems/' + id + '/step', status: 200, ms: 0,
+                         meta: 'live-ss drift=' + j.drift.toExponential(3) });
+      }
+      refreshSystems();
+      await loadTrajectories(id);
+
+      if (badge) {
+        // planets[] layout: [Sun, Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus, Neptune]
+        // Find Earth by name (more robust than hardcoding index 3)
+        const earth = planets.find(p => p.name === 'Earth');
+        const earthR = earth
+          ? Math.sqrt(earth.x**2 + earth.y**2 + earth.z**2).toFixed(3)
+          : '—';
+        badge.textContent = '● LIVE · ' + epoch.toISOString().slice(0,10) + ' · Earth r=' + earthR + ' AU';
+        badge.className = 'space-card-badge live';
+      }
+      appendAuditLog({ method: 'UI', path: '/spacedata/live-solar', status: 200, ms: 0,
+                       meta: '9 bodies (Sun + 8 planets), epoch=' + epoch.toISOString().slice(0,10) });
+    } catch (e) {
+      if (badge) { badge.textContent = 'error: ' + e.message; badge.className = 'space-card-badge error'; }
+      appendAuditLog({ method: 'UI', path: '/spacedata/live-solar', status: 0, ms: 0,
+                       meta: 'error: ' + e.message });
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function _loadAPOD() {
+    if (!SPACE_DATA_ENABLED) return;
+    const badge = $('apod-badge');
+    const img   = $('apod-img');
+    const link  = $('apod-link');
+    const dateEl = $('apod-date');
+    const titleEl = $('apod-title');
+    const explEl = $('apod-explanation');
+    if (badge) { badge.textContent = 'loading…'; badge.className = 'space-card-badge'; }
+
+    const apod = await SD.loadAPOD();
+
+    if (img)   img.src = apod.url;
+    if (link)  link.href = apod.hdurl || apod.url;
+    if (dateEl)  dateEl.textContent = apod.date || '—';
+    if (titleEl) titleEl.textContent = apod.title || 'Untitled';
+    if (explEl)  explEl.textContent = apod.explanation || '';
+
+    if (badge) {
+      if (apod.live === true) {
+        badge.textContent = '● LIVE';
+        badge.className = 'space-card-badge live';
+      } else if (apod.live === 'cache') {
+        badge.textContent = 'cached';
+        badge.className = 'space-card-badge cached';
+      } else {
+        badge.textContent = 'cached (offline)';
+        badge.className = 'space-card-badge cached';
+      }
+    }
+    appendAuditLog({ method: 'APOD', path: '/spacedata/apod', status: 200, ms: 0,
+                     meta: apod.live === true ? 'live' : 'cached' });
+  }
+
+  function _populatePlanetLegend() {
+    if (!SPACE_DATA_ENABLED) return;
+    const el = $('planet-legend');
+    if (!el) return;
+    el.innerHTML = '';
+    for (const p of SD.PLANET_INFO) {
+      const item = document.createElement('span');
+      item.className = 'planet-legend-item';
+      item.innerHTML = '<span class="planet-legend-dot" style="background:' + p.color + ';color:' + p.color + '"></span>' +
+                       p.name;
+      el.appendChild(item);
+    }
+  }
+
+  // Initialize the epoch date input to today (in local time, yyyy-mm-dd)
+  function _initEpochInput() {
+    const inp = $('live-ss-date');
+    if (!inp) return;
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    inp.value = yyyy + '-' + mm + '-' + dd;
+  }
+
+  // Renders a tiny equirectangular world map on the ISS canvas with the
+  // satellite's current position as a glowing dot, plus its horizon
+  // footprint as a translucent circle.
+  function _drawISSMap(pos) {
+    const c = $('iss-canvas');
+    if (!c) return;
+    const ctx = c.getContext('2d');
+    const W = c.width, H = c.height;
+
+    // Deep-space black background
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, W, H);
+
+    // Draw a faint grid (equator + prime meridian + tropics)
+    ctx.strokeStyle = 'rgba(48, 54, 61, 0.5)';
+    ctx.lineWidth = 0.5;
+    // Equator
+    ctx.beginPath(); ctx.moveTo(0, H/2); ctx.lineTo(W, H/2); ctx.stroke();
+    // Tropics (±23.5°)
+    const tropN = H/2 - (23.5/90) * (H/2);
+    const tropS = H/2 + (23.5/90) * (H/2);
+    ctx.strokeStyle = 'rgba(48, 54, 61, 0.25)';
+    ctx.beginPath(); ctx.moveTo(0, tropN); ctx.lineTo(W, tropN); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, tropS); ctx.lineTo(W, tropS); ctx.stroke();
+    // Prime meridian + 90°E/W
+    ctx.strokeStyle = 'rgba(48, 54, 61, 0.4)';
+    ctx.beginPath(); ctx.moveTo(W/2, 0); ctx.lineTo(W/2, H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(W/4, 0); ctx.lineTo(W/4, H); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(3*W/4, 0); ctx.lineTo(3*W/4, H); ctx.stroke();
+
+    // Draw faint continents (very rough silhouettes — just enough to read
+    // the map as "Earth" without needing an actual map image asset).
+    // Coordinates are approximate bounding rectangles for the major landmasses.
+    ctx.fillStyle = 'rgba(88, 166, 255, 0.06)';
+    const continents = [
+      // [lonMin, lonMax, latMin, latMax] in degrees
+      // North America
+      [-168, -52, 7, 72],
+      // South America
+      [-82, -34, -56, 13],
+      // Europe
+      [-10, 60, 36, 71],
+      // Africa
+      [-18, 52, -35, 37],
+      // Asia (mainland)
+      [40, 180, 5, 78],
+      // Australia
+      [113, 154, -43, -10],
+      // Antarctica (strip across the bottom)
+      [-180, 180, -90, -65]
+    ];
+    for (const [loMin, loMax, laMin, laMax] of continents) {
+      const x1 = (loMin + 180) / 360 * W;
+      const x2 = (loMax + 180) / 360 * W;
+      const y1 = (90 - laMax) / 180 * H;
+      const y2 = (90 - laMin) / 180 * H;
+      ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+    }
+
+    if (!pos) return;
+
+    // Convert lat/lon → pixel
+    // lon [-180, 180] → x [0, W]; lat [90, -90] → y [0, H]
+    const x = (pos.lon + 180) / 360 * W;
+    const y = (90 - pos.lat) / 180 * H;
+
+    // Footprint circle: the ISS altitude (~420 km) gives a horizon radius
+    // of about 22° of central angle. Draw as a translucent circle.
+    const footprintDeg = pos.footprint || 22;
+    const footprintPx = (footprintDeg / 360) * W;
+    ctx.globalCompositeOperation = 'lighter';
+    const fp = ctx.createRadialGradient(x, y, 0, x, y, footprintPx);
+    fp.addColorStop(0,   'rgba(63, 185, 80, 0.18)');
+    fp.addColorStop(0.7, 'rgba(63, 185, 80, 0.06)');
+    fp.addColorStop(1,   'rgba(63, 185, 80, 0)');
+    ctx.fillStyle = fp;
+    ctx.beginPath();
+    ctx.arc(x, y, footprintPx, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Outer glow on the dot
+    const glow = ctx.createRadialGradient(x, y, 0, x, y, 12);
+    glow.addColorStop(0,   'rgba(88, 166, 255, 0.95)');
+    glow.addColorStop(0.5, 'rgba(88, 166, 255, 0.35)');
+    glow.addColorStop(1,   'rgba(88, 166, 255, 0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(x, y, 12, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Crisp core dot
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Velocity trail stub (just a short line in the direction of motion)
+    // We don't know the direction from a single position, but if we have a
+    // previous position, draw a short fading line.
+    if (_issLastPos && _issLastPos.timestamp) {
+      const xPrev = (_issLastPos.lon + 180) / 360 * W;
+      const yPrev = (90 - _issLastPos.lat) / 180 * H;
+      // Wrap-around: if the ISS crossed the dateline, skip drawing the trail
+      if (Math.abs(xPrev - x) < W / 2) {
+        ctx.globalCompositeOperation = 'lighter';
+        const grad = ctx.createLinearGradient(xPrev, yPrev, x, y);
+        grad.addColorStop(0, 'rgba(88, 166, 255, 0)');
+        grad.addColorStop(1, 'rgba(88, 166, 255, 0.7)');
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(xPrev, yPrev);
+        ctx.lineTo(x, y);
+        ctx.stroke();
+        ctx.globalCompositeOperation = 'source-over';
+      }
+    }
+
+    // Update stats panel
+    const stats = $('iss-stats');
+    if (stats) {
+      const fmtCoord = (v, suffix) => {
+        const dir = v >= 0 ? (suffix === 'lat' ? 'N' : 'E') : (suffix === 'lat' ? 'S' : 'W');
+        return Math.abs(v).toFixed(2) + '° ' + dir;
+      };
+      stats.innerHTML =
+        '<div>lat <strong>' + fmtCoord(pos.lat, 'lat') + '</strong></div>' +
+        '<div>lon <strong>' + fmtCoord(pos.lon, 'lon') + '</strong></div>' +
+        '<div>alt <strong>' + (pos.alt ? pos.alt.toFixed(1) : '—') + ' km</strong></div>' +
+        '<div>vel <strong>' + (pos.vel ? pos.vel.toFixed(2) : '—') + ' km/s</strong></div>';
+    }
+
+    // Badge
+    const badge = $('iss-badge');
+    if (badge) {
+      if (pos.live === true) {
+        badge.textContent = '● LIVE · ' + new Date(pos.timestamp * 1000).toISOString().slice(11, 19) + 'Z';
+        badge.className = 'space-card-badge live';
+      } else {
+        badge.textContent = 'cached (offline)';
+        badge.className = 'space-card-badge cached';
+      }
+    }
+  }
+
+  function _startISSTracking() {
+    if (!SPACE_DATA_ENABLED) return;
+    if (_issStop) return;  // already running
+    _issStop = SD.startISSTracking((pos) => {
+      _drawISSMap(pos);
+      _issLastPos = pos;
+      appendAuditLog({ method: 'ISS', path: '/spacedata/iss', status: 200, ms: 0,
+                       meta: pos.live === true
+                         ? 'lat=' + pos.lat.toFixed(2) + ' lon=' + pos.lon.toFixed(2)
+                         : 'cached' });
+    });
+  }
+
+  // Wire Phase 20 UI =======================================================
+  if (SPACE_DATA_ENABLED) {
+    _populatePlanetLegend();
+    _initEpochInput();
+
+    const liveBtn = $('live-ss-run');
+    if (liveBtn) liveBtn.addEventListener('click', _runLiveSolarSystem);
+
+    // Auto-load APOD on page load (after a short delay so it doesn't block
+    // the initial scenario auto-run)
+    setTimeout(_loadAPOD, 800);
+
+    // Start the ISS tracker
+    setTimeout(_startISSTracking, 1200);
+  }
+
   // ── Phase 17: register hooks for the tour controller ────────────────────
   // The tour needs to (a) create systems, (b) switch viz mode, (c) push body
   // updates back to app.js for telemetry, (d) read E0 per system for drift.
@@ -981,7 +1330,7 @@
     // If URL hash specifies a scenario, run it; otherwise default to figure8
     const urlState = _parseHash();
     const initialScenario = urlState.s || 'figure8';
-    const validScenarios = ['twoBody','solarSystem','figure8','binaryWithPlanet','plummer32','plummer128','lattice27'];
+    const validScenarios = ['twoBody','solarSystem','solarSystemLive','figure8','binaryWithPlanet','plummer32','plummer128','lattice27'];
     const safe = validScenarios.indexOf(initialScenario) >= 0 ? initialScenario : 'figure8';
     // Wait briefly so the health poll fires first + the UI is settled
     setTimeout(() => { runScenario(safe); }, 600);

@@ -392,6 +392,32 @@
     return bodies;
   }
 
+  // ── Phase 20: Live Solar System (real JPL planet positions) ─────────────
+  // Delegates to NBodySpaceData.computePlanets() (spacedata.js) which uses
+  // real J2000 Keplerian elements from JPL (Standish 1992), propagated to
+  // the requested date using linear drift rates, then converted to heliocentric
+  // state vectors using standard astrodynamics (Kepler's equation + 3 rotation
+  // matrices). The returned bodies are in SIM UNITS: G=1, M_sun=1, length=AU,
+  // time=year/(2π) — so Earth's circular orbital velocity is exactly 1.0.
+  //
+  // If spacedata.js is not loaded, falls back to the static solarSystem()
+  // generator (4 fictitious planets at round-number radii).
+  function solarSystemLive(date) {
+    if (typeof global.NBodySpaceData === 'undefined' || !global.NBodySpaceData.computePlanets) {
+      return solarSystem();
+    }
+    const planets = global.NBodySpaceData.computePlanets(date || new Date());
+    // The MutableBodySystem constructor expects {mass, x, y, z, vx, vy, vz}.
+    // NBodySpaceData returns exactly this shape, plus name + color metadata
+    // that the constructor ignores but the renderer can use.
+    return planets.map(p => ({
+      mass: p.mass,
+      x: p.x, y: p.y, z: p.z,
+      vx: p.vx, vy: p.vy, vz: p.vz,
+      name: p.name, color: p.color
+    }));
+  }
+
   global.NBodyPhysics = {
     G,
     DefaultSoftening,
@@ -403,6 +429,7 @@
     solarSystem,        // Phase 15
     figure8,            // Phase 15
     binaryWithPlanet,   // Phase 15
+    solarSystemLive,    // Phase 20: real JPL planet positions
     totalEnergy,
     totalMomentum,
     totalEnergyTyped,
