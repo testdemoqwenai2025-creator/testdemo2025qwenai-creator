@@ -1962,3 +1962,33 @@ Stage Summary:
 - Visual: simulation now floats in true #000000 deep-space black with no frame; trajectories glow with additive neon bloom (overlapping colors brighten into white); body positions have layered bloom halos + crisp white cores.
 - Local endpoint live: http://localhost:3100/ and http://localhost:3100/?tour=1
 - GitHub Pages will update shortly at the repo's Pages URL.
+
+---
+Task ID: phase-19-playback
+Agent: main (continuation)
+Task: User reported 'no image here Trajectory + energy drift, when executed' — fix the blank canvas, then continue with the next phase.
+
+Work Log:
+- Diagnosed the blank-canvas bug using agent-browser + VLM. Two root causes found:
+  (1) viz3d.js setTrajectory() had a typo 'rowsOrBody' (should be 'rowsOrByBody') on the flat-array fallback path — threw ReferenceError that aborted rendering.
+  (2) app.js loadTrajectories() called GET /api/systems/:id/trajectories/all WITHOUT the X-Api-Key header — the in-page auth middleware rejected with 401 — no trajectory data arrived.
+- Fixed both. Verified: figure8 scenario now renders 3402 non-black pixels (was 1884), peak RGB [255,255,255]. VLM confirms 'visible trajectory line/curve ... glows, luminous against the black background'.
+- Committed fix: a2b43c4.
+- Phase 19 — Live playback engine + replay scrubber:
+  • New file docs/playback.js (~230 LOC): state machine, play/pause/stop/seek API, requestAnimationFrame loop, variable speed (0.25×–4×), adjustable trail length (0–100%), 'k' keyboard shortcut.
+  • HTML: added .playback-bar with ▶/⏹ buttons, range-slider scrubber, time readout, speed selector, trail-length slider.
+  • CSS: gradient-filled scrubber track with glowing white thumb, accent-colored speed/trail thumbs, mobile-responsive.
+  • app.js: registered NBodyPlayback.onRender hook that dispatches to renderTrajectory2D/3D using the live trail + positions. Feeds trajectory into the playback engine when loadTrajectories() completes.
+  • Smoke test: 77/77 PASS (added 17 Phase 19 assertions).
+  • Verified end-to-end: figure8 → 319 frames loaded → play() advances frac 0→1 over ~5s → seek(0.5) jumps to frame 160 → speed 2× plays twice as fast.
+  • VLM confirms 'figure-8 trajectory, glowing, pure black background'.
+- Committed Phase 19: 7d0c9a3.
+- Pushed both commits to GitHub main: 5773bb3..7d0c9a3 (PAT-authenticated).
+
+Stage Summary:
+- Smoke test: 77/77 PASS.
+- Bug fix: trajectory canvas now renders content (was blank).
+- Phase 19 feature: live playback engine + scrubber. Users can play/pause/seek/speed-control the trajectory animation.
+- Local endpoint: http://localhost:3100/ (PID via scripts/start-server.sh)
+- Auto-tour: http://localhost:3100/?tour=1
+- GitHub: 7d0c9a3 pushed to main
