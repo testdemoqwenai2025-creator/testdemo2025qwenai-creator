@@ -18,7 +18,7 @@ Zero-dependency N-body gravitational simulator in Scala 3, demonstrating the **E
 [![Live demo](https://img.shields.io/badge/demo-live-brightgreen)](https://louispenev.github.io/nbody-fold-scala/)
 [![Scala 3.4.2](https://img.shields.io/badge/Scala-3.4.2-red)](https://www.scala-lang.org/)
 [![JDK 21](https://img.shields.io/badge/JDK-21-orange)](https://openjdk.org/)
-[![Phases 0–14](https://img.shields.io/badge/phases-0--14-blue)](#status)
+[![Phases 0–15](https://img.shields.io/badge/phases-0--15-blue)](#status)
 [![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 | Phase | Status | Notes |
@@ -38,6 +38,7 @@ Zero-dependency N-body gravitational simulator in Scala 3, demonstrating the **E
 | 12 — Zero-Dependency Web Tier | ✅ Sandbox-verified | JDK-only HTTP server (`com.sun.net.httpserver.HttpServer`) + file-backed relational store (`Database.scala`: systems/bodies/trajectories tables, JSON+SHA-256 integrity tag per row, in-memory index rebuilt from log replay) + functional middleware (`type Middleware = Handler => Handler`; logging/CORS/HMAC-auth/rate-limit/errors/json-body) + REST routes (POST /api/systems, POST /api/systems/:id/step, GET /api/systems/:id/trajectories, etc.) + single-file HTML/JS frontend (vanilla, no React/Vue/Tailwind). Phase 2 `JsonParser` retrofitted with `JNum(Double)` + `numberP` for standard JSON float support. Phase12Demo 61/61 self-checks pass; end-to-end HTTP round-trip via `java.net.http.HttpClient` verified |
 | 13 — Dynamic Backend + CI | ✅ Deployable | Zero-dependency Node.js dynamic backend (`server/server.js`: `http` module + `global.window` shim reuses `docs/physics.js` + `docs/middleware.js` verbatim; `/api/health` returns live status JSON; JSON-file persistence via atomic tmp+rename; serves static files from `../docs/`). Static demo auto-detects `?backend=<URL>` query param and forwards `/api/*` calls to the real backend. Header badge is **LIVE** (pings `/api/health` every 5s) instead of a static CI badge image. GitHub Actions CI: 3 jobs (Scala 13 demos + Node smoke + dynamic backend end-to-end). One-click deploy via `render.yaml` / `fly.toml`. Smoke test 14/14 PASS; live server: create + step (drift 9.9e-12) + delete roundtrip verified |
 | 14 — 3D Viz + WebSocket Streaming + Metrics | ✅ Sandbox-verified | Hand-rolled 3D engine (`docs/viz3d.js`, ~180 LOC: Vec3 ops, rotation matrices, perspective projection, mouse-drag yaw/pitch, wheel zoom, auto-rotate, star field) on the existing 2D canvas — zero dependencies, no Three.js. 2D/3D toggle in the UI. Pure black canvas background per user feedback (space = black). WebSocket live streaming (`/api/systems/:id/stream`) — hand-rolled RFC 6455 frame parser (~80 LOC) on the server, native `WebSocket` on the client. Trajectory samples now arrive LIVE as the integrator computes them, instead of waiting for the full POST /step response. Prometheus `/metrics` endpoint (12 metrics: requests_total, uptime, system/bodies/trajectory counts, latency avg, ws_connections, drift_last, drift_avg, per-status + per-method counters). Smoke test 21/21 PASS (added 7 3D-math assertions). End-to-end test 6/6 PASS (create → WS subscribe → 10 live samples → done → /metrics drift gauge → delete). Drift 2.5e-12 over 100 steps confirms physics faithful |
+| 15 — Multi-body Trajectories + Scenario Library + Shareable 3D Views | ✅ Sandbox-verified | Three user-observable improvements: (a) **multi-body trajectory sampling** — server now samples ALL bodies (not just body 0) so every orbit is visible in 3D; new `GET /api/systems/:id/trajectories/all` returns grouped-by-body shape; WebSocket broadcasts `samples: [{bodyId,x,y,z,vx,vy,vz}]` arrays; per-body HSL color-coding in both 2D and 3D renderers. (b) **Scenario library** — 6 one-click presets at the top of the UI (Solar System ☀, Figure-8 ∞, Binary+Planet ⋆, Two-body, Plummer N=32, Lattice 3³) — each auto-creates + auto-runs + auto-loads + auto-switches to 3D. Page auto-runs Figure-8 on first load so the user immediately sees motion. (c) **Shareable 3D views** — camera yaw/pitch/dist stored in URL hash (`#cam=yaw,pitch,dist`), synced on mouseup/wheel, "⧉ share" button copies the deep link. Three new IC generators: `solarSystem()`, `figure8()` (Chenciner–Montgomery 2000), `binaryWithPlanet()`. Smoke test 35/35 PASS (added 13 Phase 15 assertions). E2E test 8/8 PASS (multi-body WS streaming + /trajectories/all + ?bodyId filter). Drift 1.4e-9 over 100 steps with N=3 bodies |
 
 ## Zero-Dependency Policy
 
@@ -212,6 +213,138 @@ Client uses the browser's native `WebSocket`.
 | `nbody_requests_by_method{method=M}` | counter | Per-method request counts |
 
 Point Grafana at `https://<your-backend>/api/metrics` for a live dashboard.
+
+## Phase 15 — Multi-body Trajectories + Scenario Library + Shareable 3D Views
+
+Phase 15 makes three user-observable improvements to the demo, motivated by
+user feedback: "couldn't make it pop out, so they could have better
+experience" + "click on it and observe the changes please".
+
+### 1. Multi-body trajectory sampling
+
+Before Phase 15, the server only sampled **body 0's** trajectory during a
+step — so for a Plummer N=32 system, the 3D canvas showed only ONE dot
+moving while the other 31 bodies were invisible. Phase 15 fixes this:
+
+- `POST /api/systems/:id/step` now persists **all bodies'** samples at every
+  `sampleEvery` interval, tagged with `bodyId`.
+- New endpoint `GET /api/systems/:id/trajectories/all` returns trajectories
+  grouped by bodyId:
+  ```json
+  {
+    "systemId": 1, "bodyCount": 5,
+    "byBody": [
+      { "bodyId": 0, "mass": 1.0, "samples": [{step,x,y,z,vx,vy,vz,energy}, ...] },
+      { "bodyId": 1, "mass": 1e-4, "samples": [...] },
+      ...
+    ]
+  }
+  ```
+- The existing flat endpoint `GET /api/systems/:id/trajectories` still works
+  (backwards-compat), now including `bodyId` in each sample. Optional
+  `?bodyId=N` query param filters to one body.
+- WebSocket streaming broadcasts `samples: [{bodyId, x,y,z, vx,vy,vz}]`
+  arrays instead of a single sample — every body's position arrives live.
+- Both 2D and 3D renderers color each body with a distinct HSL color
+  (golden-angle stepping: body 0 → red, body 1 → cyan, body 2 → lime, etc.).
+  Within a body's trail, older samples fade to lower alpha so the head is
+  bright and the tail dims into the background.
+
+### 2. Scenario library (`docs/app.js` + `docs/physics.js`)
+
+Six one-click presets at the top of the UI:
+
+| Button | Scenario | Bodies | Why it's interesting |
+|--------|----------|--------|----------------------|
+| ☀ Solar System | `solarSystem()` | 1 star + 4 planets | Inclined orbits → 3D shows real depth |
+| ∞ Figure-8 | `figure8()` | 3 equal masses | Chenciner–Montgomery 2000 choreography — all three bodies chase each other around the same figure-8 curve |
+| ⋆ Binary + Planet | `binaryWithPlanet()` | 2 stars + 1 planet | Circumbinary planet — the binary stars orbit each other while the planet orbits both |
+| ● Two-body Kepler | `twoBodyCircular()` | 2 bodies | The textbook circular orbit — sanity check |
+| ●● Plummer N=32 | `plummerSphere(32, 1)` | 32 bodies | Self-gravitating cluster — virial equilibrium |
+| ▦ Lattice 3³ | `lattice(27, 1.0)` | 27 bodies | 3×3×3 regular grid — structured data showcase |
+
+Each button:
+1. Pre-fills the IC form with the right preset/dt/softening
+2. Creates the system via POST /api/systems
+3. Opens the WebSocket (dynamic mode only) for live streaming
+4. Auto-switches to 3D mode (except twoBody, which is more striking in 2D)
+5. Runs the integrator with scenario-specific step counts
+6. Loads the trajectories and renders
+
+**Auto-run on page load:** the demo automatically runs the Figure-8 scenario
+~600ms after page load, so the user immediately sees motion without having
+to click anything. Append `?noAuto=1` to skip the auto-run (useful for
+benchmarks / CI).
+
+### 3. Shareable 3D views (`docs/viz3d.js`)
+
+The 3D camera state (yaw, pitch, distance) is stored in the URL hash:
+
+```
+https://louispenev.github.io/nbody-fold-scala/#cam=0.600,0.300,8.00
+```
+
+- Camera changes sync to the URL hash on mouseup (after drag) and on
+  debounced wheel events (250ms).
+- The hash is read on page load AND on `hashchange` events, so pasting a
+  share link in another tab restores the exact 3D view.
+- The "⧉ share" button in the canvas panel header copies the current URL
+  (with hash) to the clipboard.
+- The "↺ reset" button restores the default camera (yaw=0.6, pitch=0.3,
+  dist=8.0).
+
+`history.replaceState` is used so rapid mouse drags don't create extra
+browser history entries.
+
+### Verification
+
+```
+$ node scripts/smoke-test.js
+  ... (sections 1-6 unchanged) ...
+7. Phase 15 scenario IC generators
+  ✓ solarSystem() returns 5 bodies
+  ✓ solarSystem CM at origin
+  ✓ solarSystem net momentum ≈ 0
+  ✓ figure8() returns 3 bodies
+  ✓ figure8() equal masses (1.0 each)
+  ✓ figure8() starts on XY plane (z=0)
+  ✓ figure8() returns to start after one period (T≈6.3259)
+  ✓ binaryWithPlanet() returns 3 bodies
+  ✓ binaryWithPlanet() two heavy stars + one light planet
+  ✓ binaryWithPlanet() stars start at ±0.5 on X axis
+  ✓ figure8 energy drift < 1e-7 over 100 steps
+  ✓ figure8 momentum drift < 1e-12 over 100 steps
+
+8. Phase 15 URL hash camera sync (viz3d.js)
+  ✓ camera URL hash round-trips yaw/pitch/dist
+  ✓ camera URL hash format starts with cam=
+────────────────────────────────────
+  PASS: 35  FAIL: 0
+
+$ PORT=3197 NBODY_API_KEY=e2e-test node server/server.js &
+$ PORT=3197 NBODY_API_KEY=e2e-test node scripts/e2e-test.js
+Phase 14+15 end-to-end test
+  /api/health → 200 ok
+  /api/metrics → 200 (1582 bytes)
+  ✓ Prometheus format OK
+  create → 201 id=1 bodies=3
+  ✓ WebSocket handshake 101 Switching Protocols
+  [ws] subscribed
+  [ws] start
+  [ws] sample step=10 bodies=3
+  ... (10 samples) ...
+  [ws] sample step=100 bodies=3
+  [ws] done
+  POST /step → 200 drift=1.3856725096275113e-9
+  WebSocket received 13 messages
+  ✓ WebSocket streaming end-to-end (multi-body: 3 bodies/sample)
+  ✓ /metrics drift gauges populated
+  ✓ /trajectories/all returns 3 bodies each with 11 samples
+  ✓ /trajectories?bodyId=1 returns 11 samples (all bodyId=1)
+  delete → 200
+
+Phase 14+15 end-to-end: ALL PASS
+```
 
 ## Directory Layout
 

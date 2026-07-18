@@ -262,6 +262,102 @@
     return bodies;
   }
 
+  // ── Phase 15 scenario library ────────────────────────────────────────────
+  // Curated ICs that produce visually striking 3D trajectories so the demo
+  // immediately shows something interesting on first load.
+
+  // Solar System: central star (1.0) + 4 planets in circular orbits on
+  // slightly inclined planes (so 3D rendering shows real depth).
+  function solarSystem() {
+    const M = 1.0;
+    const planets = [
+      { r: 1.0,  m: 1e-4, inc: 0.00 },
+      { r: 1.5,  m: 2e-4, inc: 0.05 },
+      { r: 2.2,  m: 3e-4, inc: 0.10 },
+      { r: 3.0,  m: 1e-4, inc: -0.08 }
+    ];
+    const bodies = [{ mass: M, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 }];
+    for (const p of planets) {
+      const v = Math.sqrt(G * M / p.r);
+      // Position the planet on the inclined orbit: start at (r,0,0), velocity
+      // tilted by `inc` so the orbit normal is (sin(inc), 0, cos(inc)).
+      bodies.push({
+        mass: p.m,
+        x: p.r, y: 0, z: 0,
+        vx: 0,
+        vy: v * Math.cos(p.inc),
+        vz: v * Math.sin(p.inc)
+      });
+    }
+    // Null the center-of-mass velocity + position so the system doesn't drift.
+    let totalMass = 0, vcmX = 0, vcmY = 0, vcmZ = 0;
+    let pcmX = 0, pcmY = 0, pcmZ = 0;
+    for (const b of bodies) {
+      totalMass += b.mass;
+      vcmX += b.mass * b.vx; vcmY += b.mass * b.vy; vcmZ += b.mass * b.vz;
+      pcmX += b.mass * b.x; pcmY += b.mass * b.y; pcmZ += b.mass * b.z;
+    }
+    const vx0 = vcmX / totalMass, vy0 = vcmY / totalMass, vz0 = vcmZ / totalMass;
+    const px0 = pcmX / totalMass, py0 = pcmY / totalMass, pz0 = pcmZ / totalMass;
+    for (const b of bodies) {
+      b.vx -= vx0; b.vy -= vy0; b.vz -= vz0;
+      b.x  -= px0; b.y  -= py0; b.z  -= pz0;
+    }
+    return bodies;
+  }
+
+  // Figure-8 choreography (Chenciner–Montgomery 2000): three equal masses
+  // tracing the same figure-8 curve on the XY plane with period T ≈ 6.3259.
+  // Initial conditions from the literature:
+  //   r1 = ( 0.97000436, -0.24308753, 0)
+  //   r2 = (-0.97000436,  0.24308753, 0)
+  //   r3 = ( 0, 0, 0)
+  //   v3 = (-0.93240737, -0.86473146, 0)
+  //   v1 = v2 = -v3/2
+  //   G = 1, m = 1 each
+  function figure8() {
+    const r1 = { x:  0.97000436, y: -0.24308753, z: 0 };
+    const r2 = { x: -0.97000436, y:  0.24308753, z: 0 };
+    const v3 = { x: -0.93240737, y: -0.86473146, z: 0 };
+    return [
+      { mass: 1.0, x: r1.x, y: r1.y, z: r1.z, vx: -v3.x / 2, vy: -v3.y / 2, vz: 0 },
+      { mass: 1.0, x: r2.x, y: r2.y, z: r2.z, vx: -v3.x / 2, vy: -v3.y / 2, vz: 0 },
+      { mass: 1.0, x: 0,     y: 0,     z: 0,    vx:  v3.x,     vy:  v3.y,     vz: 0 }
+    ];
+  }
+
+  // Binary star + circumbinary planet: two equal-mass stars in a tight binary
+  // (r=0.5, v from circular orbit) plus a planet on a wider circular orbit
+  // (r=4, slightly inclined). Total system mass ≈ 2, planet mass negligible.
+  function binaryWithPlanet() {
+    const Mstar = 1.0;
+    const Mtot = 2 * Mstar;
+    const rBin = 0.5;
+    const vBin = Math.sqrt(G * Mstar / (2 * rBin));  // each star's speed in CM frame
+    const rPlanet = 4.0;
+    const vPlanet = Math.sqrt(G * Mtot / rPlanet);
+    const inc = 0.15;
+    const bodies = [
+      // Star 1 — left side of binary, moving up (+y)
+      { mass: Mstar, x: -rBin, y: 0, z: 0, vx: 0, vy:  vBin, vz: 0 },
+      // Star 2 — right side, moving down (-y)
+      { mass: Mstar, x:  rBin, y: 0, z: 0, vx: 0, vy: -vBin, vz: 0 },
+      // Planet — far out, circular orbit, tilted 8.6° out of plane
+      { mass: 1e-4, x: rPlanet, y: 0, z: 0,
+        vx: 0, vy: vPlanet * Math.cos(inc), vz: vPlanet * Math.sin(inc) }
+    ];
+    // Null CM (already centered but be safe)
+    let totalMass = 0, vcmX = 0, vcmY = 0, vcmZ = 0;
+    for (const b of bodies) {
+      totalMass += b.mass;
+      vcmX += b.mass * b.vx; vcmY += b.mass * b.vy; vcmZ += b.mass * b.vz;
+    }
+    for (const b of bodies) {
+      b.vx -= vcmX / totalMass; b.vy -= vcmY / totalMass; b.vz -= vcmZ / totalMass;
+    }
+    return bodies;
+  }
+
   global.NBodyPhysics = {
     G,
     DefaultSoftening,
@@ -270,6 +366,9 @@
     twoBodyCircular,
     plummerSphere,
     lattice,
+    solarSystem,        // Phase 15
+    figure8,            // Phase 15
+    binaryWithPlanet,   // Phase 15
     totalEnergy,
     totalMomentum,
     totalEnergyTyped

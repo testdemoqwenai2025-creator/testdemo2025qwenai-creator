@@ -1,12 +1,12 @@
-// Phase 14 end-to-end test: start server, exercise /metrics + WebSocket
+// Phase 14 + 15 end-to-end test: start server, exercise /metrics + WebSocket
 // streaming + 3D math via the live HTTP API. Not part of the regular
 // smoke test (which stays zero-HTTP) — this is a separate integration test.
 'use strict';
 const http = require('http');
 const crypto = require('crypto');
 
-const PORT = 3197;
-const API_KEY = 'e2e-test';
+const PORT = parseInt(process.env.PORT || '3197', 10);
+const API_KEY = process.env.NBODY_API_KEY || 'e2e-test';
 
 function req(method, path, body) {
   return new Promise((resolve, reject) => {
@@ -33,7 +33,7 @@ function req(method, path, body) {
 }
 
 async function main() {
-  console.log('Phase 14 end-to-end test');
+  console.log('Phase 14+15 end-to-end test');
 
   // 1. /api/health
   const h = await req('GET', '/api/health');
@@ -54,15 +54,16 @@ async function main() {
   }
   console.log('  ✓ Prometheus format OK');
 
-  // 3. Create a system
+  // 3. Create a system (Phase 15: use solarSystem for multi-body verification)
   const c = await req('POST', '/api/systems', {
-    name: 'e2e', dt: 0.001, softening: 1e-6,
+    name: 'e2e', dt: 0.005, softening: 0.001,
     bodies: [
-      { mass: 1, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0 },
-      { mass: 0.001, x: 1, y: 0, z: 0, vx: 0, vy: 1, vz: 0 }
+      { mass: 1,    x: 0,   y: 0, z: 0, vx: 0, vy: 0, vz: 0 },
+      { mass: 1e-4, x: 1.0, y: 0, z: 0, vx: 0, vy: 1, vz: 0 },
+      { mass: 2e-4, x: 1.5, y: 0, z: 0, vx: 0, vy: 0.816, vz: 0.04 }
     ]
   });
-  console.log('  create →', c.status, 'id=' + (c.json && c.json.id));
+  console.log('  create →', c.status, 'id=' + (c.json && c.json.id), 'bodies=' + (c.json && c.json.bodies));
   if (c.status !== 201) { console.error('FAIL: create'); process.exit(1); }
   const id = c.json.id;
 
@@ -125,7 +126,13 @@ async function main() {
       try {
         const msg = JSON.parse(payload);
         wsMessages.push(msg);
-        console.log('  [ws] ' + msg.type + (msg.sample ? ' step=' + msg.sample.step : ''));
+        if (msg.type === 'sample') {
+          // Phase 15: msg.samples is an array of {bodyId, x,y,z,vx,vy,vz}
+          const n = msg.samples ? msg.samples.length : 0;
+          console.log('  [ws] sample step=' + msg.step + ' bodies=' + n);
+        } else {
+          console.log('  [ws] ' + msg.type);
+        }
         if (msg.type === 'done') {
           wsDone = true;
           // Give the socket a moment to flush, then close + run assertions
@@ -144,7 +151,8 @@ async function main() {
 
   async function onClose() {
     console.log('  WebSocket received', wsMessages.length, 'messages');
-    const sampleCount = wsMessages.filter(m => m.type === 'sample').length;
+    const sampleMsgs = wsMessages.filter(m => m.type === 'sample');
+    const sampleCount = sampleMsgs.length;
     const hasStart = wsMessages.some(m => m.type === 'start');
     const hasSubscribed = wsMessages.some(m => m.type === 'subscribed');
     const hasDone = wsMessages.some(m => m.type === 'done');
@@ -154,7 +162,16 @@ async function main() {
       console.error('FAIL: missing WS events');
       process.exit(1);
     }
-    console.log('  ✓ WebSocket streaming end-to-end');
+    // Phase 15: each sample must carry an array of {bodyId, x,y,z,vx,vy,vz}
+    // matching the number of bodies in the system (3 for this test).
+    const allMultiBody = sampleMsgs.every(m => Array.isArray(m.samples) && m.samples.length === 3);
+    const allHaveBodyIds = sampleMsgs.every(m =>
+      m.samples.every(s => typeof s.bodyId === 'number' && Number.isFinite(s.x)));
+    if (!allMultiBody || !allHaveBodyIds) {
+      console.error('FAIL: WS samples missing multi-body shape');
+      process.exit(1);
+    }
+    console.log('  ✓ WebSocket streaming end-to-end (multi-body: 3 bodies/sample)');
 
     // 5. /api/metrics after the step — drift counter should be populated
     const m2 = await req('GET', '/api/metrics');
@@ -164,12 +181,37 @@ async function main() {
     }
     console.log('  ✓ /metrics drift gauges populated');
 
-    // 6. Cleanup: delete the system
+    // 6. Phase 15: GET /api/systems/:id/trajectories/all — must return
+    // bodyCount=3 with each body having samplesCount > 0.
+    const tAll = await req('GET', '/api/systems/' + id + '/trajectories/all');
+    if (tAll.status !== 200 || !tAll.json || tAll.json.bodyCount !== 3) {
+      console.error('FAIL: /trajectories/all bodyCount != 3 — got', tAll.json && tAll.json.bodyCount);
+      process.exit(1);
+    }
+    const allBodiesHaveSamples = tAll.json.byBody.every(b => b.samples.length > 0);
+    if (!allBodiesHaveSamples) {
+      console.error('FAIL: some body has 0 samples');
+      process.exit(1);
+    }
+    console.log('  ✓ /trajectories/all returns', tAll.json.bodyCount,
+                'bodies each with', tAll.json.byBody[0].samples.length, 'samples');
+
+    // 7. Phase 15: legacy flat endpoint with ?bodyId=1 filter
+    const tFlat = await req('GET', '/api/systems/' + id + '/trajectories?bodyId=1');
+    if (tFlat.status !== 200) { console.error('FAIL: flat /trajectories status'); process.exit(1); }
+    const allBody1 = tFlat.json.trajectories.every(t => t.bodyId === 1);
+    if (!allBody1 || tFlat.json.trajectories.length === 0) {
+      console.error('FAIL: flat ?bodyId=1 filter broken');
+      process.exit(1);
+    }
+    console.log('  ✓ /trajectories?bodyId=1 returns', tFlat.json.trajectories.length, 'samples (all bodyId=1)');
+
+    // 8. Cleanup: delete the system
     const d = await req('DELETE', '/api/systems/' + id);
     console.log('  delete →', d.status);
     if (d.status !== 200) { console.error('FAIL: delete'); process.exit(1); }
 
-    console.log('\nPhase 14 end-to-end: ALL PASS');
+    console.log('\nPhase 14+15 end-to-end: ALL PASS');
     process.exit(0);
   }
   sock.on('close', onClose);

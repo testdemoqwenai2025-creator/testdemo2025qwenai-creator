@@ -197,8 +197,8 @@ jobs:
       - name: End-to-end: create → WS subscribe → step (live samples) → delete
         run: |
           set -e
-          node scripts/e2e-test.js
-          echo "  ✓ end-to-end roundtrip + WebSocket streaming complete"
+          PORT=3199 NBODY_API_KEY=ci-test node scripts/e2e-test.js
+          echo "  ✓ end-to-end roundtrip + WebSocket streaming + multi-body (Phase 15) complete"
 
       - name: Stop server
         if: always()

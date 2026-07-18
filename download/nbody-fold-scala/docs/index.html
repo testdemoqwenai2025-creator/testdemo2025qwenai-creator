@@ -26,11 +26,27 @@
 
   <main>
     <section class="panel">
+      <h2>Scenario library <small class="hint-inline">Phase 15 · one-click presets</small></h2>
+      <div class="scenario-row">
+        <button class="scenario-btn" data-scenario="solarSystem">☀ Solar System</button>
+        <button class="scenario-btn" data-scenario="figure8">∞ Figure-8</button>
+        <button class="scenario-btn" data-scenario="binaryWithPlanet">⋆ Binary + Planet</button>
+        <button class="scenario-btn" data-scenario="twoBody">● Two-body Kepler</button>
+        <button class="scenario-btn" data-scenario="plummer32">●● Plummer N=32</button>
+        <button class="scenario-btn" data-scenario="lattice27">▦ Lattice 3³</button>
+      </div>
+      <p class="hint" id="scenario-hint">Click a preset to auto-create a system + run 300 steps + load the 3D trajectory. The Figure-8 is the famous Chenciner–Montgomery choreography — three equal masses tracing the same figure-8 curve.</p>
+    </section>
+
+    <section class="panel">
       <h2>Initial conditions</h2>
       <div class="row">
         <label>Preset
           <select id="preset">
             <option value="twoBody">two-body (Kepler)</option>
+            <option value="solarSystem">Solar System (Phase 15)</option>
+            <option value="figure8">Figure-8 (Phase 15)</option>
+            <option value="binaryWithPlanet">Binary + Planet (Phase 15)</option>
             <option value="plummer32" selected>Plummer N=32</option>
             <option value="plummer128">Plummer N=128</option>
             <option value="lattice27">lattice 3³ = 27</option>
@@ -82,6 +98,8 @@
         <span class="viz-toggle">
           <button id="viz-2d" class="active">2D</button>
           <button id="viz-3d">3D</button>
+          <button id="viz-reset" title="Reset 3D camera to default">↺ reset</button>
+          <button id="viz-share" title="Copy a share link with this camera angle">⧉ share</button>
         </span>
       </h2>
       <div class="canvas-wrap">

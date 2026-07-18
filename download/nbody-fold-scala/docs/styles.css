@@ -213,6 +213,49 @@ canvas:active { cursor: grabbing; }
   font-size: 11px;
   color: var(--text-dim);
 }
+.hint-inline {
+  margin-left: 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  font-weight: normal;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ── Phase 15: scenario library ──────────────────────────────────── */
+.scenario-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.scenario-btn {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-family: var(--mono);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.scenario-btn:hover {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+}
+.scenario-btn:active {
+  transform: scale(0.97);
+}
+.scenario-btn.running {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+  opacity: 0.6;
+  pointer-events: none;
+}
 
 #audit-log {
   background: #000000;

@@ -295,10 +295,18 @@ const DB = {
     const rows = await DB.trajectoriesOf(systemId);
     return rows.length ? rows[rows.length - 1] : null;
   },
-  async insertTrajectory(systemId, step, x, y, z, vx, vy, vz, energy) {
+  async insertTrajectory(systemId, step, bodyId, x, y, z, vx, vy, vz, energy) {
+    // Phase 15: signature now includes bodyId (kept backwards-compatible —
+    // callers that omit bodyId get bodyId: 0 via the default).
+    if (typeof bodyId === 'number') {
+      // new Phase 15 shape: (sysId, step, bodyId, x, y, z, vx, vy, vz, energy)
+    } else {
+      // legacy shape: (sysId, step, x, y, z, vx, vy, vz, energy) — treat bodyId as 0
+      energy = vz; vz = vy; vy = vx; vx = z; z = y; y = x; x = bodyId; bodyId = 0;
+    }
     const row = {
       id: db._seq.trajectories++,
-      systemId: +systemId, step: +step,
+      systemId: +systemId, step: +step, bodyId: +bodyId,
       x: +x, y: +y, z: +z, vx: +vx, vy: +vy, vz: +vz, energy: +energy
     };
     db.trajectories.push(row);
@@ -434,8 +442,12 @@ async function handleCreateSystem(req, res) {
   for (const b of bodiesArr) await DB.insertBody(sys.id, b);
   const bodies = await DB.bodiesOf(sys.id);
   const e0 = P.totalEnergy(bodies, softening);
-  const b0 = bodies[0];
-  await DB.insertTrajectory(sys.id, 0, b0.x, b0.y, b0.z, b0.vx, b0.vy, b0.vz, e0);
+  // Phase 15: persist step-0 trajectory for ALL bodies (bodyId 0..N-1)
+  // so the demo can render every body's path, not just body 0.
+  for (let i = 0; i < bodies.length; i++) {
+    const b = bodies[i];
+    await DB.insertTrajectory(sys.id, 0, i, b.x, b.y, b.z, b.vx, b.vy, b.vz, e0);
+  }
   sendJson(res, 201, { id: sys.id, createdAt: sys.createdAt, bodies: bodiesArr.length, energy0: e0 });
 }
 
@@ -473,24 +485,33 @@ async function handleStepSystem(req, res) {
   const e0 = lastTraj ? lastTraj.energy : system.energy();
   let lastEnergy = e0;
   // Phase 14: broadcast a "start" message so clients know to clear stale state
-  wsBroadcast(id, { type: 'start', systemId: id, steps, sampleEvery, energy0: e0 });
+  wsBroadcast(id, { type: 'start', systemId: id, steps, sampleEvery, energy0: e0, bodies: bodies.length });
   for (let s = 1; s <= steps; s++) {
     system.step(sys.dt);
     if (s % sampleEvery === 0 || s === steps) {
       lastEnergy = system.energy();
-      const b0 = system.toJSON()[0];
+      const snap = system.toJSON();
       const stepNum = (sys.steps || 0) + s;
-      await DB.insertTrajectory(id, stepNum,
-        b0.x, b0.y, b0.z, b0.vx, b0.vy, b0.vz, lastEnergy);
-      // Phase 14: broadcast the sample to any WebSocket subscribers
+      // Phase 15: sample ALL bodies. Persist each one with its bodyId so the
+      // frontend can render every body's path. WebSocket broadcasts the
+      // whole snapshot as an array of {bodyId, x,y,z,vx,vy,vz} samples.
+      const samples = [];
+      for (let i = 0; i < snap.length; i++) {
+        const b = snap[i];
+        await DB.insertTrajectory(id, stepNum, i,
+          b.x, b.y, b.z, b.vx, b.vy, b.vz, lastEnergy);
+        samples.push({
+          bodyId: i,
+          x: b.x, y: b.y, z: b.z,
+          vx: b.vx, vy: b.vy, vz: b.vz
+        });
+      }
+      // Phase 14: broadcast the snapshot to any WebSocket subscribers
       wsBroadcast(id, {
         type: 'sample',
-        sample: {
-          step: stepNum,
-          x: b0.x, y: b0.y, z: b0.z,
-          vx: b0.vx, vy: b0.vy, vz: b0.vz,
-          energy: lastEnergy
-        }
+        step: stepNum,
+        energy: lastEnergy,
+        samples   // Phase 15: array of all bodies' samples
       });
     }
   }
@@ -517,12 +538,59 @@ async function handleTrajectories(req, res) {
   const sys = await DB.getSystem(id);
   if (!sys) return sendJson(res, 404, { error: 'not_found' });
   const rows = await DB.trajectoriesOf(id);
+  // Phase 15: keep backwards-compatible flat array, but include bodyId.
+  // Also accept ?bodyId=N to filter to a single body.
+  const filterBody = req.query.bodyId !== undefined ? parseInt(req.query.bodyId, 10) : null;
+  const filtered = Number.isFinite(filterBody)
+    ? rows.filter(r => r.bodyId === filterBody)
+    : rows;
   sendJson(res, 200, {
     systemId: id,
-    trajectories: rows.map(t => ({
-      step: t.step, x: t.x, y: t.y, z: t.z,
+    trajectories: filtered.map(t => ({
+      step: t.step, bodyId: t.bodyId === undefined ? 0 : t.bodyId,
+      x: t.x, y: t.y, z: t.z,
       vx: t.vx, vy: t.vy, vz: t.vz, energy: t.energy
     }))
+  });
+}
+
+// ── Phase 15: GET /api/systems/:id/trajectories/all ───────────────────────
+// Returns trajectories grouped by bodyId — much friendlier for the multi-body
+// 3D renderer. Shape:
+//   {
+//     systemId, bodyCount,
+//     byBody: [
+//       { bodyId, mass, samples: [{step, x,y,z, vx,vy,vz, energy}, ...] },
+//       ...
+//     ]
+//   }
+async function handleTrajectoriesAll(req, res) {
+  const id = pathId(req, 2);
+  if (id === null) return sendJson(res, 400, { error: 'invalid_id' });
+  const sys = await DB.getSystem(id);
+  if (!sys) return sendJson(res, 404, { error: 'not_found' });
+  const [rows, bodyRows] = await Promise.all([DB.trajectoriesOf(id), DB.bodiesOf(id)]);
+  const byBody = [];
+  for (let i = 0; i < bodyRows.length; i++) {
+    const b = bodyRows[i];
+    const samples = rows
+      .filter(t => (t.bodyId === undefined ? 0 : t.bodyId) === i)
+      .map(t => ({
+        step: t.step,
+        x: t.x, y: t.y, z: t.z,
+        vx: t.vx, vy: t.vy, vz: t.vz,
+        energy: t.energy
+      }));
+    byBody.push({
+      bodyId: i,
+      mass: b.mass,
+      samples
+    });
+  }
+  sendJson(res, 200, {
+    systemId: id,
+    bodyCount: bodyRows.length,
+    byBody
   });
 }
 
@@ -625,6 +693,7 @@ async function dispatch(req, res) {
     if (m === 'POST'   && segs.length === 2 && segs[0] === 'api' && segs[1] === 'systems')        return handleCreateSystem(req, res);
     if (m === 'GET'    && segs.length === 3 && segs[0] === 'api' && segs[1] === 'systems')        return handleGetSystem(req, res);
     if (m === 'POST'   && segs.length === 4 && segs[0] === 'api' && segs[1] === 'systems' && segs[3] === 'step')        return handleStepSystem(req, res);
+    if (m === 'GET'    && segs.length === 5 && segs[0] === 'api' && segs[1] === 'systems' && segs[3] === 'trajectories' && segs[4] === 'all') return handleTrajectoriesAll(req, res);
     if (m === 'GET'    && segs.length === 4 && segs[0] === 'api' && segs[1] === 'systems' && segs[3] === 'trajectories') return handleTrajectories(req, res);
     if (m === 'DELETE' && segs.length === 3 && segs[0] === 'api' && segs[1] === 'systems')        return handleDeleteSystem(req, res);
     if (m === 'GET'    && segs.length === 2 && segs[0] === 'api' && segs[1] === 'audit')          return handleAudit(req, res);

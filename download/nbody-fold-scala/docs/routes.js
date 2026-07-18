@@ -77,11 +77,13 @@
       const sys = await db.insertSystem(name, dt, softening);
       for (const b of bodiesArr) await db.insertBody(sys.id, b);
 
-      // Persist initial state as step 0 trajectory
+      // Phase 15: persist step-0 trajectory for ALL bodies, not just body 0.
       const bodies = await db.bodiesOf(sys.id);
       const e0 = P.totalEnergy(bodies, softening);
-      const b0 = bodies[0];
-      await db.insertTrajectory(sys.id, 0, b0.x, b0.y, b0.z, b0.vx, b0.vy, b0.vz, e0);
+      for (let i = 0; i < bodies.length; i++) {
+        const b = bodies[i];
+        await db.insertTrajectory(sys.id, 0, i, b.x, b.y, b.z, b.vx, b.vy, b.vz, e0);
+      }
 
       return json(201, {
         id: sys.id, createdAt: sys.createdAt,
@@ -130,18 +132,25 @@
       const lastTraj = await db.lastTrajectoryOf(id);
       const e0 = lastTraj ? lastTraj.energy : system.energy();
 
-      // Evolve, persisting samples every sampleEvery steps
+      // Phase 15: sample ALL bodies (not just body 0). Each sample is stored
+      // with its bodyId so the frontend can render every body's path.
       let lastEnergy = e0;
       const init = system.toJSON();
-      await db.insertTrajectory(id, sys.steps || 0, init[0].x, init[0].y, init[0].z,
-                                init[0].vx, init[0].vy, init[0].vz, e0);
+      for (let i = 0; i < init.length; i++) {
+        const b = init[i];
+        await db.insertTrajectory(id, sys.steps || 0, i,
+          b.x, b.y, b.z, b.vx, b.vy, b.vz, e0);
+      }
       for (let s = 1; s <= steps; s++) {
         system.step(sys.dt);
         if (s % sampleEvery === 0 || s === steps) {
           lastEnergy = system.energy();
-          const b0 = system.toJSON()[0];
-          await db.insertTrajectory(id, (sys.steps || 0) + s,
-            b0.x, b0.y, b0.z, b0.vx, b0.vy, b0.vz, lastEnergy);
+          const snap = system.toJSON();
+          for (let i = 0; i < snap.length; i++) {
+            const b = snap[i];
+            await db.insertTrajectory(id, (sys.steps || 0) + s, i,
+              b.x, b.y, b.z, b.vx, b.vy, b.vz, lastEnergy);
+          }
         }
       }
       await db.updateSystemSteps(id, steps);
@@ -157,19 +166,52 @@
     }
 
     // ── GET /api/systems/:id/trajectories ───────────────────────────────
+    // Phase 15: include bodyId in each sample. Optional ?bodyId=N filter.
     async function trajectories(req) {
       const id = pathId(req, 2);
       if (id === null) return errorJson(400, 'invalid_id');
       const sys = await db.getSystem(id);
       if (!sys) return errorJson(404, 'not_found');
       const rows = await db.trajectoriesOf(id);
+      const filterBody = req.query && req.query.bodyId !== undefined
+        ? parseInt(req.query.bodyId, 10) : null;
+      const filtered = Number.isFinite(filterBody)
+        ? rows.filter(r => (r.bodyId === undefined ? 0 : r.bodyId) === filterBody)
+        : rows;
       return json(200, {
         systemId: id,
-        trajectories: rows.map(t => ({
-          step: t.step, x: t.x, y: t.y, z: t.z,
+        trajectories: filtered.map(t => ({
+          step: t.step, bodyId: t.bodyId === undefined ? 0 : t.bodyId,
+          x: t.x, y: t.y, z: t.z,
           vx: t.vx, vy: t.vy, vz: t.vz, energy: t.energy
         }))
       });
+    }
+
+    // ── GET /api/systems/:id/trajectories/all ───────────────────────────
+    // Phase 15: grouped-by-body shape for multi-body rendering.
+    async function trajectoriesAll(req) {
+      const id = pathId(req, 2);
+      if (id === null) return errorJson(400, 'invalid_id');
+      const sys = await db.getSystem(id);
+      if (!sys) return errorJson(404, 'not_found');
+      const [rows, bodyRows] = await Promise.all([
+        db.trajectoriesOf(id), db.bodiesOf(id)
+      ]);
+      const byBody = [];
+      for (let i = 0; i < bodyRows.length; i++) {
+        const b = bodyRows[i];
+        const samples = rows
+          .filter(t => (t.bodyId === undefined ? 0 : t.bodyId) === i)
+          .map(t => ({
+            step: t.step,
+            x: t.x, y: t.y, z: t.z,
+            vx: t.vx, vy: t.vy, vz: t.vz,
+            energy: t.energy
+          }));
+        byBody.push({ bodyId: i, mass: b.mass, samples });
+      }
+      return json(200, { systemId: id, bodyCount: bodyRows.length, byBody });
     }
 
     // ── DELETE /api/systems/:id ─────────────────────────────────────────
@@ -196,13 +238,14 @@
       if (m === 'POST'   && segs.length === 2 && segs[0] === 'api' && segs[1] === 'systems')        return createSystem(req);
       if (m === 'GET'    && segs.length === 3 && segs[0] === 'api' && segs[1] === 'systems')        return getSystem(req);
       if (m === 'POST'   && segs.length === 4 && segs[0] === 'api' && segs[1] === 'systems' && segs[3] === 'step')        return stepSystem(req);
+      if (m === 'GET'    && segs.length === 5 && segs[0] === 'api' && segs[1] === 'systems' && segs[3] === 'trajectories' && segs[4] === 'all') return trajectoriesAll(req);
       if (m === 'GET'    && segs.length === 4 && segs[0] === 'api' && segs[1] === 'systems' && segs[3] === 'trajectories') return trajectories(req);
       if (m === 'DELETE' && segs.length === 3 && segs[0] === 'api' && segs[1] === 'systems')        return deleteSystem(req);
       if (m === 'GET'    && segs.length === 2 && segs[0] === 'api' && segs[1] === 'audit')          return audit(req);
       return errorJson(404, 'no_route');
     }
 
-    return { dispatch, health, listSystems, createSystem, getSystem, stepSystem, trajectories, deleteSystem, audit };
+    return { dispatch, health, listSystems, createSystem, getSystem, stepSystem, trajectories, trajectoriesAll, deleteSystem, audit };
   }
 
   function pathId(req, idx) {

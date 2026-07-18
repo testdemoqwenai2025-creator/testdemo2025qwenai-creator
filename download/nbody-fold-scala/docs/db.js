@@ -20,7 +20,7 @@
   'use strict';
 
   const DB_NAME = 'nbody-fold';
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;  // Phase 15: bumped to add bodyId field to trajectories
   const STORES = ['systems', 'bodies', 'trajectories', 'audit'];
 
   let _db = null;
@@ -158,10 +158,19 @@
     return rows.length ? rows[rows.length - 1] : null;
   }
 
-  async function insertTrajectory(systemId, step, x, y, z, vx, vy, vz, energy) {
+  async function insertTrajectory(systemId, step, bodyId, x, y, z, vx, vy, vz, energy) {
+    // Phase 15: signature now includes bodyId.
+    // Backwards-compatible with legacy (sysId, step, x, y, z, vx, vy, vz, energy)
+    // by detecting whether the 3rd arg is a number-shaped bodyId.
+    if (typeof bodyId === 'number') {
+      // new shape
+    } else {
+      // legacy shape — shift args right
+      energy = vz; vz = vy; vy = vx; vx = z; z = y; y = x; x = bodyId; bodyId = 0;
+    }
     const id = _nextId.trajectories++;
     const row = {
-      id, systemId, step: +step,
+      id, systemId, step: +step, bodyId: +bodyId,
       x: +x, y: +y, z: +z, vx: +vx, vy: +vy, vz: +vz,
       energy: +energy
     };

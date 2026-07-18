@@ -96,12 +96,21 @@
       this.canvas = canvas;
       this.ctx = canvas.getContext('2d');
       this.camera = new Camera();
-      this.trajectory = [];    // [{x,y,z,step,energy}, ...]
-      this.bodies = [];        // [{x,y,z,mass}, ...]
-      this.stars = [];         // background star field
+      // Phase 15: trajectories is now an array of {bodyId, samples:[{x,y,z,step,energy}, ...]}
+      // For backwards compatibility, setTrajectory(rows) still accepts a flat
+      // array and treats it as bodyId=0.
+      this.trajectories = [];   // [{bodyId, samples}, ...]
+      this.bodies = [];         // [{x,y,z,mass}, ...] — current positions
+      this.stars = [];          // background star field
       this.autoRotate = true;
       this.dragging = false;
       this.lastMouse = null;
+      // Phase 15: optional callback fired after camera changes (for URL hash sync)
+      this.onCameraChange = null;
+      // Phase 15: read initial camera state from URL hash (#cam=yaw,pitch,dist)
+      this._loadCameraFromHash();
+      // Debounce hash updates so rapid mouse drags don't thrash the URL
+      this._hashUpdateTimer = null;
 
       // Generate a static star field (deterministic, doesn't change between frames)
       this._generateStars(180);
@@ -113,8 +122,12 @@
         canvas.style.cursor = 'grabbing';
       });
       window.addEventListener('mouseup', () => {
-        this.dragging = false;
-        canvas.style.cursor = 'grab';
+        if (this.dragging) {
+          this.dragging = false;
+          canvas.style.cursor = 'grab';
+          // Phase 15: sync camera to URL hash on mouse release
+          this._saveCameraToHash();
+        }
       });
       window.addEventListener('mousemove', (e) => {
         if (!this.dragging) return;
@@ -135,9 +148,50 @@
         this.camera.dist *= (1 + e.deltaY * 0.001);
         if (this.camera.dist < 2)    this.camera.dist = 2;
         if (this.camera.dist > 50)   this.camera.dist = 50;
+        // Phase 15: sync camera to URL hash after zoom (debounced)
+        this._scheduleHashUpdate();
       }, { passive: false });
 
+      // Phase 15: respond to URL hash changes (e.g., user pastes a share link)
+      window.addEventListener('hashchange', () => this._loadCameraFromHash());
+
       canvas.style.cursor = 'grab';
+    }
+
+    // ── Phase 15: URL hash sync ────────────────────────────────────────────
+    // Format: #cam=yaw,pitch,dist — shareable deep link to a specific 3D view.
+    _loadCameraFromHash() {
+      const h = (window.location.hash || '').replace(/^#/, '');
+      if (!h.startsWith('cam=')) return;
+      const parts = h.slice(4).split(',');
+      if (parts.length !== 3) return;
+      const yaw = parseFloat(parts[0]);
+      const pitch = parseFloat(parts[1]);
+      const dist = parseFloat(parts[2]);
+      if (Number.isFinite(yaw))   this.camera.yaw   = yaw;
+      if (Number.isFinite(pitch)) this.camera.pitch = pitch;
+      if (Number.isFinite(dist))  this.camera.dist  = Math.max(2, Math.min(50, dist));
+    }
+
+    _saveCameraToHash() {
+      const h = 'cam=' +
+        this.camera.yaw.toFixed(3) + ',' +
+        this.camera.pitch.toFixed(3) + ',' +
+        this.camera.dist.toFixed(2);
+      if (window.location.hash !== '#' + h) {
+        // Use replaceState-style hash update to avoid creating extra history entries
+        try {
+          history.replaceState(null, '', '#' + h);
+        } catch (_) {
+          window.location.hash = h;
+        }
+      }
+      if (this.onCameraChange) this.onCameraChange(this.camera);
+    }
+
+    _scheduleHashUpdate() {
+      if (this._hashUpdateTimer) clearTimeout(this._hashUpdateTimer);
+      this._hashUpdateTimer = setTimeout(() => this._saveCameraToHash(), 250);
     }
 
     _generateStars(n) {
@@ -163,13 +217,42 @@
       }
     }
 
-    setTrajectory(rows) { this.trajectory = rows || []; }
+    // Phase 15: setTrajectory accepts either:
+    //   (a) flat array of samples — treated as bodyId=0 (backwards compat)
+    //   (b) array of {bodyId, samples} — multi-body shape (preferred)
+    setTrajectory(rowsOrByBody) {
+      if (!Array.isArray(rowsOrByBody)) {
+        this.trajectories = [];
+        return;
+      }
+      // Detect multi-body shape: first element has a `samples` array
+      if (rowsOrByBody.length > 0 && Array.isArray(rowsOrByBody[0].samples)) {
+        this.trajectories = rowsOrByBody.map(g => ({
+          bodyId: g.bodyId,
+          samples: g.samples || []
+        }));
+      } else {
+        // Flat-array shape — wrap as single-body for backwards compat
+        this.trajectories = [{ bodyId: 0, samples: rowsOrBody }];
+      }
+    }
     setBodies(bodies)   { this.bodies = bodies || []; }
     setAutoRotate(v)    { this.autoRotate = !!v; }
     resetCamera() {
       this.camera.yaw = 0.6;
       this.camera.pitch = 0.3;
       this.camera.dist = 8.0;
+      this._saveCameraToHash();
+    }
+
+    // Phase 15: deterministic per-body color (HSL wheel).
+    // bodyId 0 → red (sun/primary), 1 → cyan, 2 → lime, etc.
+    bodyColor(bodyId, alpha) {
+      const hue = (bodyId * 137.508) % 360;  // golden-angle stepping
+      const sat = 80;
+      const light = 60;
+      if (alpha === undefined) return 'hsl(' + hue + ',' + sat + '%,' + light + '%)';
+      return 'hsla(' + hue + ',' + sat + '%,' + light + '%,' + alpha + ')';
     }
 
     // Render one frame. Call from a requestAnimationFrame loop OR on demand.
@@ -196,49 +279,56 @@
         ctx.fillRect(p.x, p.y, 1, 1);
       }
 
-      // ── Trajectory polyline ──────────────────────────────────────────────
-      // Draw as gradient: green at start, fading to red at end.
-      if (this.trajectory.length > 1) {
-        for (let i = 1; i < this.trajectory.length; i++) {
-          const a = project(this.trajectory[i - 1], this.camera, W, H);
-          const b = project(this.trajectory[i], this.camera, W, H);
+      // ── Multi-body trajectories (Phase 15) ──────────────────────────────
+      // Each body's trajectory gets its own color (HSL golden-angle wheel).
+      // Within a body's trajectory, older samples fade to lower alpha so the
+      // head of the trail is bright and the tail dims into the background.
+      let totalSamples = 0;
+      for (const traj of this.trajectories) {
+        const samples = traj.samples;
+        if (samples.length < 2) { totalSamples += samples.length; continue; }
+        const baseColor = this.bodyColor(traj.bodyId);
+        for (let i = 1; i < samples.length; i++) {
+          const a = project(samples[i - 1], this.camera, W, H);
+          const b = project(samples[i], this.camera, W, H);
           if (!a || !b) continue;
-          const t = i / this.trajectory.length;
-          // Green (start) → Yellow → Red (end) — temperature gradient
-          const r = Math.round(255 * t);
-          const g = Math.round(255 * (1 - t));
-          ctx.strokeStyle = 'rgb(' + r + ',' + g + ',80)';
+          // Fade from 0.25 (tail) → 1.0 (head) along the trail
+          const t = i / samples.length;
+          const alpha = 0.25 + 0.75 * t;
+          ctx.strokeStyle = this.bodyColor(traj.bodyId, alpha);
           ctx.lineWidth = 1.5;
           ctx.beginPath();
           ctx.moveTo(a.x, a.y);
           ctx.lineTo(b.x, b.y);
           ctx.stroke();
         }
+        totalSamples += samples.length;
       }
 
-      // ── Body points (current positions) ─────────────────────────────────
-      // Larger bodies draw as bigger circles. Closer bodies (lower z) draw bigger.
-      for (const b of this.bodies) {
+      // ── Body points (current positions, Phase 15: color per body) ───────
+      for (let i = 0; i < this.bodies.length; i++) {
+        const b = this.bodies[i];
         const p = project(b, this.camera, W, H);
         if (!p) continue;
-        const radius = Math.max(1.5, Math.cbrt(b.mass) * 3 * (p.scale / 100));
-        // Inner glow
+        const radius = Math.max(1.5, Math.cbrt(Math.max(1e-9, b.mass)) * 3 * (p.scale / 100));
+        const color = this.bodyColor(i);
+        // Outer glow (per-body color)
         const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius * 2.5);
-        grad.addColorStop(0, 'rgba(88,166,255,0.9)');
-        grad.addColorStop(0.5, 'rgba(88,166,255,0.3)');
-        grad.addColorStop(1, 'rgba(88,166,255,0)');
+        grad.addColorStop(0, this.bodyColor(i, 0.9));
+        grad.addColorStop(0.5, this.bodyColor(i, 0.3));
+        grad.addColorStop(1, this.bodyColor(i, 0));
         ctx.fillStyle = grad;
         ctx.beginPath();
         ctx.arc(p.x, p.y, radius * 2.5, 0, Math.PI * 2);
         ctx.fill();
-        // Solid core
+        // Solid white core
         ctx.fillStyle = '#ffffff';
         ctx.beginPath();
         ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
         ctx.fill();
       }
 
-      // ── HUD overlay (camera params) ─────────────────────────────────────
+      // ── HUD overlay (camera params + body count) ────────────────────────
       ctx.fillStyle = 'rgba(139,148,158,0.8)';
       ctx.font = '10px monospace';
       ctx.fillText('yaw=' + this.camera.yaw.toFixed(2) +
@@ -247,7 +337,7 @@
                    (this.autoRotate ? '  [auto-rotate]' : '  [paused]'),
                    8, H - 8);
       ctx.fillText('drag to rotate · wheel to zoom · N=' + this.bodies.length +
-                   ' · samples=' + this.trajectory.length,
+                   ' · trails=' + this.trajectories.length + ' · samples=' + totalSamples,
                    8, 14);
     }
 

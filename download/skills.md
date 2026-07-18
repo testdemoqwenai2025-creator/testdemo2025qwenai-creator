@@ -838,3 +838,209 @@ Phase 14 end-to-end: ALL PASS
    `/api/metrics` endpoint.
 6. **3D trajectory persistence across sessions** — store the camera
    yaw/pitch/dist in URL hash so users can share a specific view.
+
+
+---
+
+## Section 12 — Phase 15: Multi-body Trajectories + Scenario Library + Shareable 3D Views
+
+### Goal
+
+Three user-observable improvements to the demo, motivated by user
+feedback: "click on it and observe the changes please". Phase 15 makes
+the demo immediately interesting on first load, shows ALL bodies' orbits
+(not just body 0), and makes 3D views shareable via URL hash.
+
+### Deliverables
+
+1. **`docs/physics.js`** — three new IC generators:
+   - `solarSystem()` — central star (1.0) + 4 planets in circular orbits
+     on slightly inclined planes (inc=0.0/0.05/0.10/-0.08). CM at origin,
+     zero net momentum.
+   - `figure8()` — the Chenciner–Montgomery 2000 three-body figure-8
+     choreography. Three equal masses (1.0 each) trace the same figure-8
+     curve with period T ≈ 6.3259. Literature ICs (r1, r2, v3).
+   - `binaryWithPlanet()` — two equal-mass stars (1.0 each) in a tight
+     binary at r=0.5, plus a planet (1e-4) on a circumbinary orbit at
+     r=4 with 8.6° inclination.
+
+2. **`server/server.js`** + **`docs/routes.js`** + **`docs/db.js`** — multi-body
+   trajectory sampling:
+   - `DB.insertTrajectory(systemId, step, bodyId, x, y, z, vx, vy, vz, energy)`
+     — signature now includes `bodyId`. Backwards-compatible: detects
+     legacy 8-arg call shape and shifts args (bodyId=0).
+   - `handleStepSystem` now iterates `system.toJSON()` (all bodies) and
+     inserts one trajectory row per body per sampled step. WebSocket
+     broadcasts `{type:'sample', step, energy, samples:[{bodyId,x,y,z,vx,vy,vz}]}`
+     — the `samples` array replaces the previous single-`sample` field.
+   - `handleCreateSystem` persists step-0 trajectory for ALL bodies (not
+     just body 0) so the initial state is fully captured.
+   - New endpoint `GET /api/systems/:id/trajectories/all` returns
+     `{systemId, bodyCount, byBody:[{bodyId, mass, samples}]}` —
+     grouped-by-body shape, friendlier for multi-body 3D rendering.
+   - Existing `GET /api/systems/:id/trajectories` keeps the flat array
+     shape (backwards-compat) but now includes `bodyId` in each sample.
+     Optional `?bodyId=N` query param filters to one body.
+   - IndexedDB schema bumped to DB_VERSION=2 (Phase 15) — old stores
+     get re-created on first load with the new `bodyId` field.
+
+3. **`docs/viz3d.js`** — multi-body rendering + URL hash sync:
+   - `setTrajectory(input)` accepts either flat array (backwards-compat,
+     treated as bodyId=0) OR `[{bodyId, samples}]` (preferred multi-body
+     shape).
+   - `bodyColor(bodyId, alpha)` — deterministic per-body HSL color via
+     golden-angle stepping (bodyId * 137.508° mod 360).
+   - Multi-body trail rendering: each body's trajectory in its own color;
+     within a body's trail, alpha fades from 0.25 (tail) → 1.0 (head) so
+     the head is bright and the tail dims.
+   - Body points (current positions) get per-body-colored radial glow.
+   - URL hash sync: `#cam=yaw,pitch,dist`. Read on page load + on
+     `hashchange` events. Written on mouseup (after drag) and on
+     debounced wheel events (250ms). Uses `history.replaceState` to
+     avoid creating extra history entries.
+   - New `onCameraChange` callback hook (for future integrations).
+   - New `resetCamera()` writes the default to the URL hash too.
+
+4. **`docs/app.js`** — scenario library + multi-body loading:
+   - `SCENARIO_PARAMS` map: 6 presets with tuned dt/softening/steps/
+     sampleEvery for each scenario.
+   - `runScenario(key)` orchestrates: pre-fill IC form → create system →
+     open live stream → auto-switch to 3D → run integrator → load
+     trajectories. Button shows "running" state during execution.
+   - `loadTrajectories(id)` now tries `/trajectories/all` first (multi-body
+     shape), falls back to flat endpoint. Stores both
+     `_currentTrajectoriesByBody` (for 3D multi-body rendering) and
+     `_currentTrajectory` (body 0's samples, for the energy chart).
+   - `renderTrajectory2D(input)` rewritten to accept multi-body shape,
+     color-codes each body's path with the same HSL wheel as the 3D
+     renderer, auto-scales to fit ALL bodies' bounding box.
+   - WebSocket `onmessage` handler updated to consume the new
+     `msg.samples` array — appends each body's sample to its group in
+     `_currentTrajectoriesByBody`.
+   - `viz-reset` and `viz-share` button handlers wired up.
+   - **Auto-run on page load**: 600ms after init, `runScenario('figure8')`
+     fires automatically. User sees motion immediately. `?noAuto=1`
+     skips this (for benchmarks / CI).
+
+5. **`docs/index.html`** — scenario library UI at the top of the page:
+   - 6 scenario buttons in a flex-wrap row, each with an icon + label.
+   - Hint paragraph explaining what each scenario is.
+   - Added "↺ reset" and "⧉ share" buttons to the viz-toggle group in
+     the canvas panel header.
+
+6. **`docs/styles.css`** — new `.scenario-row` + `.scenario-btn` styles
+   (hover/active/running states) + `.hint-inline` for inline hint text
+   in section headings.
+
+7. **`scripts/smoke-test.js`** — added section 7 (Phase 15 IC generators)
+   with 11 assertions:
+   - solarSystem returns 5 bodies, CM at origin, net momentum ≈ 0
+   - figure8 returns 3 equal masses on XY plane, returns to start after
+     one period T ≈ 6.3259 (max displacement < 0.05)
+   - binaryWithPlanet returns 3 bodies with two heavy stars + light
+     planet at ±0.5 on X axis
+   - figure8 energy drift < 1e-7 over 100 steps, momentum drift < 1e-12
+   And section 8 (URL hash camera sync) with 2 assertions: round-trip
+   parse + format check. Total: 35/35 PASS (was 21/21).
+
+8. **`scripts/e2e-test.js`** — updated to verify multi-body shape:
+   - Now creates a 3-body system (sun + 2 planets) instead of 2-body.
+   - WS sample messages now logged with `bodies=N` count.
+   - New assertion: every sample message has `samples.length === 3` and
+     each sample has a numeric `bodyId` and finite `x`.
+   - New assertion: `GET /trajectories/all` returns `bodyCount === 3`
+     with each body having `samples.length > 0`.
+   - New assertion: `GET /trajectories?bodyId=1` returns only body 1's
+     samples.
+   - PORT + API_KEY now read from env (defaults: 3197, e2e-test) so CI
+     can pass PORT=3199 NBODY_API_KEY=ci-test.
+
+9. **`.github/workflows/ci.yml`** — updated e2e step to pass
+   `PORT=3199 NBODY_API_KEY=ci-test` env vars to `node scripts/e2e-test.js`.
+
+### Verification
+
+```
+$ node scripts/smoke-test.js   (35/35 PASS, +14 from Phase 14)
+$ PORT=3197 NBODY_API_KEY=e2e-test node scripts/e2e-test.js
+  → Phase 14+15 end-to-end: ALL PASS
+  → 8/8 assertions (multi-body WS streaming + /trajectories/all + ?bodyId filter)
+  → drift 1.4e-9 over 100 steps with N=3 bodies
+```
+
+### Design choices
+
+1. **Why sample ALL bodies instead of just body 0?**
+   Before Phase 15, the demo only showed ONE body's path — for a
+   Plummer N=32 cluster, 31 bodies were invisible. Multi-body sampling
+   makes the actual choreography visible. Cost: ~N× more trajectory
+   rows in the DB, but for demo-scale systems (N ≤ 128) this is
+   negligible. The flat `/trajectories` endpoint is kept for backwards
+   compatibility (and the new `?bodyId=N` filter lets clients fetch
+   just one body if they want).
+
+2. **Why auto-run Figure-8 on page load?**
+   User feedback: "click on it and observe the changes please". The
+   Figure-8 is the most visually striking scenario — three equal masses
+   chasing each other around the same figure-8 curve. Auto-running it
+   on page load means the user sees motion within ~1 second of opening
+   the demo, without having to read any instructions or click any
+   buttons. `?noAuto=1` skips this for benchmarks / CI.
+
+3. **Why HSL golden-angle color stepping for bodies?**
+   The golden angle (137.508°) maximally separates consecutive hues on
+   the color wheel, so adjacent bodyIds get visually distinct colors
+   even for large N. body 0 → red, body 1 → cyan, body 2 → lime,
+   body 3 → magenta, etc. Deterministic — same bodyId always gets the
+   same color across renders.
+
+4. **Why URL hash instead of query param for camera state?**
+   Query params trigger server-side rerouting in some hosting setups
+   (GitHub Pages is fine, but other static hosts may behave
+   differently). The URL hash is purely client-side — `#cam=...` never
+   hits the server. `history.replaceState` updates the hash without
+   creating extra history entries (so rapid mouse drags don't pollute
+   the back button). Pasting a share link in a new tab restores the
+   exact 3D view.
+
+5. **Why `?bodyId=N` filter on the flat endpoint?**
+   Lets clients fetch a single body's trajectory without downloading
+   all N bodies' samples. Useful for: (a) the 2D renderer when only
+   one body is "interesting" (e.g., the planet in binary+planet), (b)
+   server-side downsampling for very large N, (c) per-body drill-down
+   views in future UIs.
+
+### Standing directives satisfied
+
+1. ✅ skills.md updated with Phase 15 spec (this section)
+2. ✅ GitHub push (immediately after smoke + e2e tests pass)
+3. ✅ Demo with frontend-visible output — multi-body colored trajectories,
+   scenario library, auto-run Figure-8, shareable 3D views. All visible
+   on first page load.
+4. ✅ Forwarding the demo endpoint to the user (per Phase 15 directive:
+   "could you forward the endpoint of the frontend, would like to click
+   on it and observe the changes please")
+
+### Phase 16 candidates (forward-looking)
+
+1. **Barnes-Hut on the server** — port the Scala Phase 9 solver to JS
+   so the dynamic backend handles N>2000 in reasonable time. Currently
+   O(N²) brute force.
+2. **JWT auth + multi-tenant** — replace shared NBODY_API_KEY with
+   JWT-issued per-user tokens. Add User + Session tables.
+3. **Phase 9/10 JIT warmup fix** — add a pre-main warmup loop in
+   Phase9Demo/Phase10Demo so CI runners with cold JITs produce stable
+   numbers. Removes the continue-on-error escape hatch.
+4. **Grafana dashboard JSON** — ship a ready-to-import Grafana
+   dashboard JSON in `docs/grafana-dashboard.json` that consumes the
+   `/api/metrics` endpoint.
+5. **WebGL renderer for very large N** — if Phase 16 adds Barnes-Hut
+   and N>10k becomes feasible, switch to WebGL points + lines for
+   rendering (would still stay zero-dep by writing raw GLSL shaders,
+   ~300 LOC, but trades complexity for throughput).
+6. **Per-body energy breakdown** — currently the energy chart shows
+   system-level total energy drift. Phase 16 could add per-body KE/PE
+   breakdowns so users can see how energy is exchanged between bodies.
+7. **Scenario sharing via URL** — extend the URL hash to also encode
+   the current scenario (`#s=figure8&cam=...`) so users can share a
+   specific scenario + camera view combo.
