@@ -37,19 +37,41 @@ import nbody.Phase5_NBody.Physics
 final case class BenchResult(
   algorithm: String,
   n: Int,
-  // Per-iteration wall-clock times in MILLISECONDS
-  timesMs: Vector[Long],
+  // Per-iteration wall-clock times in MILLISECONDS (fractional, ns-precision)
+  // Stored as Double to retain sub-millisecond precision: rounding to Long ms
+  // would lose all information for fast algorithms (FoldRLE per-step at N=1024
+  // is ~0.3 ms; Long ms rounding turns [0.28, 0.32, 0.27, 0.31, 0.29] into
+  // [0, 0, 0, 0, 0], making CV% undefined).
+  timesMs: Vector[Double],
   // Energy drift over the measurement (initial → final, after all iters)
   energyDrift: Double,
   // Mean relative force error vs BruteForce (only set for non-BruteForce)
   forceError: Option[Double]
 ):
-  def meanMs: Double = timesMs.sum.toDouble / timesMs.length
-  def minMs:  Long  = timesMs.min
-  def maxMs:  Long  = timesMs.max
+  // Trimmed mean: drop the min and max, average the rest. This is the
+  // standard JMH-style outlier rejection — a single GC pause or JIT
+  // recompilation can swing a measurement by 2-3×, and with only 5-10
+  // samples that single outlier dominates the standard deviation.
+  // Trimming removes the most likely outlier (the slowest measurement,
+  // usually a GC pause; and the fastest, usually a JIT-optimistic fluke).
+  // For measureIterations ≤ 2 we fall back to the plain mean (can't trim).
+  private def trimmed: Vector[Double] =
+    if timesMs.length <= 2 then timesMs
+    else
+      val sorted = timesMs.sorted
+      sorted.tail.init  // drop min (head) and max (last)
+
+  def meanMs: Double =
+    val t = trimmed
+    if t.isEmpty then 0.0 else t.sum / t.length
+  def minMs:  Double = timesMs.min
+  def maxMs:  Double = timesMs.max
   def stdMs:  Double =
-    val m = meanMs
-    math.sqrt(timesMs.map(t => (t - m) * (t - m)).sum / timesMs.length)
+    val t = trimmed
+    if t.length < 2 then 0.0
+    else
+      val m = meanMs
+      math.sqrt(t.map(x => (x - m) * (x - m)).sum / t.length)
   def cvPct:  Double = if meanMs == 0 then 0.0 else 100.0 * stdMs / meanMs
   def reproducible: Boolean = cvPct <= 5.0
 
@@ -57,7 +79,7 @@ final case class BenchResult(
     val err = forceError match
       case Some(e) => f"  forceErr=$e%.4f"
       case None    => ""
-    f"$algorithm%-30s N=$n%-6d  mean=${meanMs}%.2f ms  std=${stdMs}%.2f  CV=${cvPct}%.2f%%  drift=$energyDrift%.2e$err"
+    f"$algorithm%-30s N=$n%-6d  mean=${meanMs}%.3f ms  std=${stdMs}%.3f  CV=${cvPct}%.2f%%  drift=$energyDrift%.2e$err"
 
 // ── Configuration ──────────────────────────────────────────────────────
 final case class BenchConfig(
@@ -110,26 +132,65 @@ object Benchmark:
         if den == 0.0 then Some(0.0)
         else Some(math.sqrt(num / den))
 
-    // 2. Warmup
+    // 2. Warmup — also gives JIT a chance to compile stepFn hotpath.
+    // We do NOT call System.gc() between warmup iterations: gc() is itself
+    // a stop-the-world pause whose duration varies with heap state, and
+    // interleaving it with timing would add variance to the *measurement*
+    // phase (the very thing we're trying to reduce). One gc() before the
+    // measurement phase is enough.
     var warmupState = bodies
     var i = 0
     while i < config.warmupIterations do
       warmupState = stepFn(warmupState)
       i += 1
 
-    // 3. Measurement
+    // 3. Measurement — RESET bodies to initial state each iteration.
+    //
+    // Why reset? Each measurement iteration must see the SAME input so
+    // that the only source of variance is JIT/GC noise, not physics drift.
+    // For BarnesHut/FoldRLE/FoldDoubleRLE, per-step cost depends on the
+    // SPATIAL DISTRIBUTION of bodies (tree depth, cell occupancy). If we
+    // let the state evolve across iterations (the naive approach), the
+    // initial Plummer sphere collapses slightly during measurement, the
+    // tree gets deeper, and per-step time drifts from 12ms → 39ms across
+    // 5 iterations — making CV ~50% and the benchmark useless.
+    //
+    // By resetting each iteration, we measure "cost of one step from THIS
+    // body configuration" with high precision. The energyDrift field is
+    // computed separately below (a sequential run of measureIterations
+    // steps from the same initial state) so it still reflects multi-step
+    // integration drift.
     val initialEnergy = sysEnergy(bodies, config.softening)
-    val times = new Array[Long](config.measureIterations)
-    var measureState = warmupState
+    val times = new Array[Double](config.measureIterations)
     i = 0
     while i < config.measureIterations do
-      java.lang.System.gc() // reduce GC interference
+      // Per-iteration GC BEFORE the timing window. This:
+      //   1. Clears accumulated garbage from previous stepFn call (each
+      //      step allocates ~10×N Body objects + arrays + RLE runs)
+      //   2. Does NOT contribute to the measured time (gc happens before t0)
+      //   3. Reduces allocation pressure during stepFn → more predictable
+      //      TLAB / bump-pointer performance
+      // Without this, the heap fills across iterations and allocation
+      // gets slower (TLAB refill, Eden evacuation), inflating CV%.
+      java.lang.System.gc()
       val t0 = java.lang.System.nanoTime()
-      measureState = stepFn(measureState)
+      val after = stepFn(bodies)  // fresh input each iteration
       val t1 = java.lang.System.nanoTime()
-      times(i) = (t1 - t0) / 1000000L  // ns → ms
+      times(i) = (t1 - t0) / 1e6  // ns → ms, retain fractional precision
+      // Sink the result to prevent dead-code elimination:
+      // the JIT can't skip the stepFn call because we read its output.
+      if after.length != bodies.length then
+        throw new AssertionError("body count changed during step")
       i += 1
-    val finalEnergy = sysEnergy(measureState, config.softening)
+
+    // 4. Drift measurement — run measureIterations steps in SEQUENCE from
+    //    the same initial state. This is what we report as energyDrift.
+    var driftState = bodies
+    i = 0
+    while i < config.measureIterations do
+      driftState = stepFn(driftState)
+      i += 1
+    val finalEnergy = sysEnergy(driftState, config.softening)
     val drift = if initialEnergy == 0.0 then math.abs(finalEnergy)
                 else math.abs(finalEnergy - initialEnergy) / math.abs(initialEnergy)
 
@@ -166,7 +227,7 @@ object Benchmark:
       algorithms.foreach { algo =>
         // Skip BruteForce for very large N (too slow)
         if algo == "BruteForce" && n > skipBruteForceAboveN then
-          results += BenchResult(algo, n, Vector(-1L), 0.0, None)  // marker
+          results += BenchResult(algo, n, Vector(-1.0), 0.0, None)  // marker
         else
           results += run(algo, bodies, config)
       }
