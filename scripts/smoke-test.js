@@ -10,7 +10,9 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const DOCS = '/home/z/my-project/docs';
+// Resolve docs/ relative to this script's location so the test works
+// both locally (~/my-project/) and in CI (~/runner/work/.../).
+const DOCS = path.resolve(__dirname, '..', 'docs');
 
 // Read each JS file
 function load(file) {
