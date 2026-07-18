@@ -454,6 +454,8 @@
     document.getElementById('viz-hint').textContent = _is3DMode
       ? '3D perspective view. Drag to rotate · wheel to zoom · auto-rotates when idle. URL hash stores camera angle (shareable).'
       : '2D projection (XY plane). Click 3D for a rotatable perspective view.';
+    // Phase 18: persist mode in URL hash so refresh + share preserve it
+    _syncUrlState({ mode: _is3DMode ? '3d' : '2d' });
     // Re-render with the new mode using the current data
     if (_currentTrajectoriesByBody.length > 0 || _currentBodies.length > 0) {
       renderTrajectory(_currentTrajectoriesByBody);
@@ -461,6 +463,54 @@
       // Empty render just to flip the canvas to the right bg
       renderTrajectory([]);
     }
+  }
+
+  // ── Phase 18: URL hash state ───────────────────────────────────────────
+  // Encodes {mode, scenario} into the URL hash so a refresh (or a shared
+  // link) restores the same view. Format: #s=figure8&m=3d (or #m=2d alone,
+  // or empty for defaults). The 3D camera angle (#cam=...) is written by
+  // viz3d.js; we preserve it by parsing + re-emitting the hash here.
+  function _parseHash() {
+    const h = (window.location.hash || '').replace(/^#/, '');
+    const out = {};
+    for (const kv of h.split('&')) {
+      const [k, v] = kv.split('=');
+      if (k && v) out[k] = decodeURIComponent(v);
+    }
+    return out;
+  }
+
+  function _syncUrlState(updates) {
+    const cur = _parseHash();
+    Object.assign(cur, updates);
+    // Re-build the hash, preserving unknown keys (e.g. cam= from viz3d.js)
+    const parts = [];
+    for (const k of Object.keys(cur)) {
+      if (cur[k] !== undefined && cur[k] !== '') parts.push(k + '=' + encodeURIComponent(cur[k]));
+    }
+    const newHash = parts.length ? '#' + parts.join('&') : '';
+    if (newHash !== window.location.hash) {
+      // Replace state so we don't pollute the back button history
+      try { history.replaceState(null, '', newHash || window.location.pathname + window.location.search); } catch (_) {}
+    }
+  }
+
+  function _applyUrlStateOnLoad() {
+    const s = _parseHash();
+    if (s.m === '3d' || s.m === '2d') {
+      // Defer to let the initial render settle, then flip the mode
+      setTimeout(() => setVizMode(s.m === '3d'), 50);
+    }
+    // If a scenario is requested in the URL, run it (overrides the default
+    // figure8 auto-run, but only if noAuto or tour=1 isn't set)
+    if (s.s && !urlParams.get('noAuto') && !urlParams.get('tour')) {
+      const valid = ['twoBody','solarSystem','figure8','binaryWithPlanet','plummer32','plummer128','lattice27'];
+      if (valid.indexOf(s.s) >= 0) {
+        setTimeout(() => runScenario(s.s), 600);
+        return true;
+      }
+    }
+    return false;
   }
 
   function renderEnergy(rows) {
@@ -560,6 +610,9 @@
   async function runScenario(scenarioKey) {
     const params = SCENARIO_PARAMS[scenarioKey];
     if (!params) return;
+    // Phase 18: persist the chosen scenario in the URL hash so a refresh
+    // restores the same scenario (and a shared link opens it directly).
+    _syncUrlState({ s: scenarioKey });
     // Set the button into "running" state to give visual feedback
     const btn = document.querySelector('.scenario-btn[data-scenario="' + scenarioKey + '"]');
     if (btn) btn.classList.add('running');
@@ -835,19 +888,32 @@
   // the POST /step response. We do that by wrapping fetch once more — but only
   // for /step paths — and recording timings.)
 
-  // ── Phase 15: auto-run on first load ─────────────────────────────────────
-  // The user explicitly asked to be able to "click on it and observe the
-  // changes" — so on first page load we auto-run the Figure-8 scenario,
-  // which is the most visually striking (three equal masses chasing each
-  // other around the figure-8 curve). Skip auto-run if URL has ?noAuto=1
-  // or ?tour=1 (the tour will run instead).
+  // ── Phase 15+18: auto-run on first load ─────────────────────────────────
+  // Priority (highest first):
+  //   1. ?noAuto=1               → no auto-run, leave the page idle
+  //   2. ?tour=1                 → start the sound+voice tour
+  //   3. #s=<scenario> in URL    → run that specific scenario (shareable)
+  //   4. default                  → run Figure-8 (most visually striking)
   const noAuto = urlParams.get('noAuto') === '1';
   const autoTour = urlParams.get('tour') === '1';
   if (autoTour && window.NBodyTour) {
     // Wait for everything to settle, then start the tour
     setTimeout(() => { window.NBodyTour.play(); }, 1200);
   } else if (!noAuto) {
+    // If URL hash specifies a scenario, run it; otherwise default to figure8
+    const urlState = _parseHash();
+    const initialScenario = urlState.s || 'figure8';
+    const validScenarios = ['twoBody','solarSystem','figure8','binaryWithPlanet','plummer32','plummer128','lattice27'];
+    const safe = validScenarios.indexOf(initialScenario) >= 0 ? initialScenario : 'figure8';
     // Wait briefly so the health poll fires first + the UI is settled
-    setTimeout(() => { runScenario('figure8'); }, 600);
+    setTimeout(() => { runScenario(safe); }, 600);
   }
+
+  // Apply mode (2d/3d) from URL hash if present
+  (function _applyInitialMode() {
+    const s = _parseHash();
+    if (s.m === '3d' || s.m === '2d') {
+      setTimeout(() => setVizMode(s.m === '3d'), 100);
+    }
+  })();
 })();

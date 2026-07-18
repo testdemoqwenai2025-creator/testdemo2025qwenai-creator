@@ -66,13 +66,51 @@
   let _stepTimer = null;      // setTimeout handle for stepping
   let _pauseResolve = null;   // used to pause between scenarios
   let _soundEnabled = true;
+  let _voiceEnabled = true;   // Phase 18: speechSynthesis narration
   let _stepStartMs = 0;
   let _stepCount = 0;
   let _currentSystemId = null;
   let _currentBodies = [];
+  let _currentUtterance = null;  // Phase 18: tracks the in-flight speech
 
   // ── DOM refs (resolved lazily so tour.js can load before app.js finishes) ──
   function $(id) { return document.getElementById(id); }
+
+  // ── Phase 18: Voice narration via Web Speech API ──────────────────────
+  // Uses window.speechSynthesis to read the narration body aloud. Picked
+  // because it's zero-dependency (built into every modern browser) and
+  // makes the tour accessible to users who can't watch the screen the whole
+  // time. Falls back silently on browsers without speechSynthesis.
+  function _speak(text) {
+    if (!_voiceEnabled) return;
+    if (!window.speechSynthesis) return;
+    try {
+      window.speechSynthesis.cancel();  // stop any in-flight utterance
+      const u = new SpeechSynthesisUtterance(text);
+      u.rate = 1.0;     // normal speed
+      u.pitch = 1.0;
+      u.volume = 0.85;  // slightly under the music bed so it stays intelligible
+      // Pick an English voice if one is available
+      const voices = window.speechSynthesis.getVoices() || [];
+      const en = voices.find(v => /^en[-_]/i.test(v.lang)) || voices[0];
+      if (en) u.voice = en;
+      _currentUtterance = u;
+      window.speechSynthesis.speak(u);
+    } catch (_) { /* silent fallback */ }
+  }
+
+  function _stopSpeaking() {
+    if (window.speechSynthesis) {
+      try { window.speechSynthesis.cancel(); } catch (_) {}
+    }
+    _currentUtterance = null;
+  }
+
+  function setVoiceEnabled(v) {
+    _voiceEnabled = !!v;
+    if (!_voiceEnabled) _stopSpeaking();
+  }
+  function isVoiceEnabled() { return _voiceEnabled; }
 
   // ── Public API ───────────────────────────────────────────────────────
 
@@ -99,6 +137,11 @@
     $('tour-status').textContent = 'paused';
     if (_rafHandle) cancelAnimationFrame(_rafHandle);
     _rafHandle = null;
+    // Phase 18: pause speech too (browser will resume from where it stopped
+    // when we call resume on speechSynthesis)
+    if (window.speechSynthesis) {
+      try { window.speechSynthesis.pause(); } catch (_) {}
+    }
   }
 
   function stop() {
@@ -109,6 +152,7 @@
     if (_stepTimer) clearTimeout(_stepTimer);
     _stepTimer = null;
     try { window.NBodySonify.stop(); } catch (_) {}
+    _stopSpeaking();  // Phase 18
     _updateButtons();
     $('narration-title').textContent = 'Stopped';
     $('narration-body').textContent = 'Tour stopped. Press ▶ Play tour to start again from the beginning.';
@@ -117,11 +161,22 @@
     $('tour-status').textContent = 'idle';
   }
 
+  // Phase 18: prev — go back one scenario (paired with skip = next)
+  function prev() {
+    if (_state === 'idle') return;
+    if (_stepTimer) { clearTimeout(_stepTimer); _stepTimer = null; }
+    if (_rafHandle) { cancelAnimationFrame(_rafHandle); _rafHandle = null; }
+    _stopSpeaking();
+    _index = Math.max(0, _index - 1);
+    if (_state === 'playing') _runCurrent();
+  }
+
   function skip() {
     if (_state === 'idle') return;
     // Cancel any pending timers / RAF
     if (_stepTimer) { clearTimeout(_stepTimer); _stepTimer = null; }
     if (_rafHandle) { cancelAnimationFrame(_rafHandle); _rafHandle = null; }
+    _stopSpeaking();
     _index++;
     if (_index >= TOUR_ORDER.length) {
       _finish();
@@ -154,6 +209,10 @@
     if (_soundEnabled) {
       window.NBodySonify.resume().then(() => window.NBodySonify.start());
     }
+    // Phase 18: resume speech synthesis if it was paused
+    if (window.speechSynthesis) {
+      try { window.speechSynthesis.resume(); } catch (_) {}
+    }
     _runSoundLoop();
   }
 
@@ -165,6 +224,11 @@
     $('narration-step').textContent = 'scenario ' + (_index + 1) + ' / ' + TOUR_ORDER.length;
     $('tour-status').textContent = 'running: ' + scenario.key;
     _updateProgress(0);
+
+    // Phase 18: speak the narration title + body aloud (in parallel with the
+    // music bed). Cancel any in-flight utterance first so a Skip mid-speech
+    // doesn't bleed into the next scenario.
+    _speak(scenario.title + '. ' + scenario.body);
 
     // Reuse the global SCENARIO_PARAMS from app.js (window.NBodyTourParams)
     const params = (window.NBodyTourParams && window.NBodyTourParams[scenario.key]) || {
@@ -298,11 +362,14 @@
     if (_rafHandle) cancelAnimationFrame(_rafHandle);
     _rafHandle = null;
     try { window.NBodySonify.stop(); } catch (_) {}
+    _stopSpeaking();
     _updateButtons();
     $('narration-title').textContent = 'Tour complete';
     $('narration-body').textContent = 'That was the full tour — six scenarios covering Kepler orbits, the Figure-8 choreography, circumbinary planets, Plummer cluster relaxation, and cold lattice collapse. Press ▶ Play tour to watch again, or pick a scenario above to explore it manually.';
     $('narration-progress-bar').style.width = '100%';
     $('tour-status').textContent = 'complete';
+    // Phase 18: speak the closing line
+    _speak('Tour complete. Six scenarios covered: Kepler orbits, the Figure-8 choreography, circumbinary planets, Plummer cluster relaxation, and cold lattice collapse.');
   }
 
   function _updateButtons() {
@@ -313,6 +380,52 @@
     $('tour-pause').disabled = !playing;
     $('tour-stop').disabled = _state === 'idle';
     $('tour-skip').disabled = _state === 'idle';
+    $('tour-prev').disabled = _state === 'idle' || _index === 0;  // Phase 18
+  }
+
+  // ── Phase 18: keyboard shortcuts ─────────────────────────────────────
+  //   Space       play / pause toggle
+  //   →           skip to next scenario
+  //   ←           prev scenario
+  //   Esc         stop tour
+  //   M           toggle music (sound on/off)
+  //   V           toggle voice narration
+  function _onKeydown(e) {
+    // Ignore keystrokes that originate from a text input / textarea
+    const tag = (e.target && e.target.tagName) || '';
+    if (/^(INPUT|TEXTAREA|SELECT)$/i.test(tag)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    switch (e.key) {
+      case ' ':
+        e.preventDefault();
+        if (_state === 'idle') play();
+        else if (_state === 'playing') pause();
+        else if (_state === 'paused') _resume();
+        break;
+      case 'ArrowRight':
+        e.preventDefault();
+        skip();
+        break;
+      case 'ArrowLeft':
+        e.preventDefault();
+        prev();
+        break;
+      case 'Escape':
+        e.preventDefault();
+        stop();
+        break;
+      case 'm': case 'M': {
+        const cb = $('tour-sound');
+        if (cb) { cb.checked = !cb.checked; setSoundEnabled(cb.checked); }
+        break;
+      }
+      case 'v': case 'V': {
+        const cb = $('tour-voice');
+        if (cb) { cb.checked = !cb.checked; setVoiceEnabled(cb.checked); }
+        else setVoiceEnabled(!isVoiceEnabled());
+        break;
+      }
+    }
   }
 
   // ── Wire up DOM (after DOMContentLoaded) ─────────────────────────────
@@ -321,7 +434,17 @@
     $('tour-pause').addEventListener('click', pause);
     $('tour-stop').addEventListener('click', stop);
     $('tour-skip').addEventListener('click', skip);
+    const prevBtn = $('tour-prev');
+    if (prevBtn) prevBtn.addEventListener('click', prev);
     $('tour-sound').addEventListener('change', (e) => setSoundEnabled(e.target.checked));
+    const voiceCb = $('tour-voice');
+    if (voiceCb) voiceCb.addEventListener('change', (e) => setVoiceEnabled(e.target.checked));
+    document.addEventListener('keydown', _onKeydown);  // Phase 18
+    // Warm up the speechSynthesis voices list (Chrome loads them async)
+    if (window.speechSynthesis && typeof window.speechSynthesis.getVoices === 'function') {
+      try { window.speechSynthesis.getVoices(); } catch (_) {}
+      try { window.speechSynthesis.onvoiceschanged = () => {}; } catch (_) {}
+    }
     _updateButtons();
   }
 
@@ -334,9 +457,9 @@
   // Expose a tiny API for app.js to register its hooks (createSystem,
   // setVizMode, setBodies, getE0) and for tests to query state.
   window.NBodyTour = {
-    play, pause, stop, skip,
-    setSoundEnabled,
-    isPlaying, getState,
+    play, pause, stop, skip, prev,
+    setSoundEnabled, setVoiceEnabled,
+    isPlaying, getState, isVoiceEnabled,
     // Hooks that app.js fills in:
     createSystem: null,
     setVizMode: null,

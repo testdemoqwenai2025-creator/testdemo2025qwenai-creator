@@ -391,3 +391,65 @@ footer a:hover { text-decoration: underline; }
   font-size: 10px;
   color: var(--text-dim);
 }
+
+/* ── Phase 18: keyboard hint styling ──────────────────────────────── */
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text);
+  line-height: 1.2;
+}
+
+/* ── Phase 18: mobile responsive layout ──────────────────────────── */
+@media (max-width: 720px) {
+  .topbar {
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .brand h1 { font-size: 15px; }
+  main {
+    margin: 12px auto;
+    padding: 0 10px;
+    gap: 12px;
+  }
+  .panel { padding: 12px; }
+  .panel h2 { font-size: 12px; }
+  .row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .row label { width: 100%; }
+  .row input, .row select { width: 100%; min-width: 0; }
+  /* Buttons stack full-width on mobile so they're easy to tap */
+  .row > button,
+  .scenario-row .scenario-btn {
+    width: 100%;
+    padding: 12px;
+    font-size: 14px;
+  }
+  .scenario-row { flex-direction: column; }
+  .viz-toggle { float: none; margin: 8px 0 0; }
+  .viz-toggle button { padding: 6px 12px; font-size: 12px; }
+  canvas { width: 100%; }
+  .telemetry-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+  .tele-value { font-size: 13px; }
+  .tele-label { font-size: 9px; }
+  .tour-narration { padding: 12px; min-height: 130px; }
+  .narration-title { font-size: 14px; }
+  .narration-body { font-size: 12px; }
+  /* Mobile: hide the "tip" paragraph to save vertical space */
+  .hint { font-size: 10px; }
+  /* Touch-friendly: disable the grab cursor (confusing on touch) */
+  canvas { cursor: default; }
+}

@@ -167,23 +167,32 @@
       </div>
     </section>
 
-    <!-- Phase 17: Sonification + automated tour -->
+    <!-- Phase 17+18: Sonification + automated tour + voice narration -->
     <section class="panel">
-      <h2>Sound demo · automated tour <small class="hint-inline">Phase 17 · click ▶ Play tour</small></h2>
+      <h2>Sound demo · automated tour <small class="hint-inline">Phase 17+18 · click ▶ Play tour · voice + music</small></h2>
       <div class="row">
-        <button id="tour-play" title="Play the full automated tour through every scenario with synchronized sound">▶ Play tour</button>
+        <button id="tour-play" title="Play the full automated tour through every scenario with synchronized sound + voice narration">▶ Play tour</button>
         <button id="tour-pause" disabled>⏸ Pause</button>
         <button id="tour-stop" disabled>⏹ Stop</button>
-        <button id="tour-skip" disabled>⏭ Skip</button>
+        <button id="tour-prev" disabled title="Previous scenario (← arrow key)">⏮ Prev</button>
+        <button id="tour-skip" disabled title="Next scenario (→ arrow key)">⏭ Skip</button>
         <label class="tour-sound-toggle">
           <input type="checkbox" id="tour-sound" checked>
-          <span>🔊 sound</span>
+          <span>🎵 music</span>
+        </label>
+        <label class="tour-sound-toggle">
+          <input type="checkbox" id="tour-voice" checked>
+          <span>🗣 voice</span>
         </label>
         <span class="hint-inline" id="tour-status">idle</span>
       </div>
+      <p class="hint" style="margin-top:8px;">
+        Keyboard: <kbd>Space</kbd> play/pause · <kbd>←</kbd>/<kbd>→</kbd> prev/skip · <kbd>Esc</kbd> stop · <kbd>M</kbd> music · <kbd>V</kbd> voice.
+        Append <code>?tour=1</code> to the URL to auto-start.
+      </p>
       <div class="tour-narration" id="tour-narration">
         <div class="narration-title" id="narration-title">Welcome</div>
-        <div class="narration-body" id="narration-body">Press ▶ Play tour to start the automated demonstration. Each scenario will run with synchronized sonification — body positions drive oscillator frequencies, close encounters trigger percussion, and energy drift modulates an ambient drone.</div>
+        <div class="narration-body" id="narration-body">Press ▶ Play tour to start the automated demonstration. Each scenario will run with synchronized sonification — body positions drive oscillator frequencies, close encounters trigger percussion, energy drift modulates an ambient drone, and a synthesized voice narrates the science.</div>
         <div class="narration-progress">
           <div class="narration-progress-bar" id="narration-progress-bar"></div>
         </div>

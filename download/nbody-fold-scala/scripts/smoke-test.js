@@ -328,6 +328,54 @@ function assert(name, cond, extra) {
   }
   console.log('');
 
+  // ── 11. Phase 18: voice narration + keyboard shortcuts + URL state ──────
+  console.log('11. Phase 18 voice + keyboard + URL state');
+  {
+    const tourSrc = fs.readFileSync(path.join(docsDir, 'tour.js'), 'utf8');
+    // Voice narration
+    assert('tour.js uses speechSynthesis for voice narration',
+      /window\.speechSynthesis/.test(tourSrc) && /SpeechSynthesisUtterance/.test(tourSrc));
+    assert('tour.js exposes setVoiceEnabled + isVoiceEnabled',
+      /setVoiceEnabled/.test(tourSrc) && /isVoiceEnabled/.test(tourSrc));
+    assert('tour.js cancels in-flight speech on skip/stop',
+      /speechSynthesis\.cancel\(\)/.test(tourSrc));
+    assert('tour.js picks an English voice if available',
+      /getVoices\(\)/.test(tourSrc) && /v\.lang/.test(tourSrc));
+    // Keyboard shortcuts
+    assert('tour.js wires keydown listener for keyboard shortcuts',
+      /addEventListener\(['"]keydown['"]/.test(tourSrc));
+    assert('tour.js handles Space (play/pause)',
+      /case ['"] ['"]:/i.test(tourSrc) || /case [\"']\s[\"']:/.test(tourSrc) ||
+      /e\.key\s*===?\s*['"]\s['"]/.test(tourSrc));
+    assert('tour.js handles ArrowRight (skip)',
+      /ArrowRight/.test(tourSrc));
+    assert('tour.js handles ArrowLeft (prev)',
+      /ArrowLeft/.test(tourSrc));
+    assert('tour.js exposes prev() for going back a scenario',
+      /function\s+prev\s*\(/.test(tourSrc) && /prev,\s*\n?\s*setSoundEnabled/.test(tourSrc));
+    assert('tour.js ignores keystrokes from input/textarea/select',
+      /INPUT|TEXTAREA|SELECT/i.test(tourSrc));
+    // URL state
+    const appSrc = fs.readFileSync(path.join(docsDir, 'app.js'), 'utf8');
+    assert('app.js has _parseHash() for URL hash state',
+      /function\s+_parseHash\s*\(/.test(appSrc));
+    assert('app.js has _syncUrlState() to update the hash',
+      /function\s+_syncUrlState\s*\(/.test(appSrc));
+    assert('app.js persists scenario in URL hash via #s=',
+      /_syncUrlState\(\s*\{\s*s:\s*scenarioKey\s*\}\s*\)/.test(appSrc));
+    assert('app.js persists 2d/3d mode in URL hash via #m=',
+      /mode:\s*_is3DMode\s*\?\s*['"]3d['"]\s*:\s*['"]2d['"]/.test(appSrc));
+    assert('app.js honors #s=<scenario> on initial load',
+      /urlState\.s/.test(appSrc) && /runScenario\(safe\)/.test(appSrc));
+    // Mobile responsive layout
+    const cssSrc = fs.readFileSync(path.join(docsDir, 'styles.css'), 'utf8');
+    assert('styles.css has @media (max-width:720px) mobile breakpoint',
+      /@media\s*\(\s*max-width:\s*720px\s*\)/.test(cssSrc));
+    assert('styles.css stacks buttons full-width on mobile',
+      /\.row\s*>\s*button/.test(cssSrc) && /width:\s*100%/.test(cssSrc));
+  }
+  console.log('');
+
   // ── Summary ────────────────────────────────────────────────────────────
   console.log('────────────────────────────────────');
   console.log('  PASS: ' + pass + '  FAIL: ' + fail);
