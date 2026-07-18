@@ -2,7 +2,11 @@
 
 Zero-dependency N-body gravitational simulator in Scala 3, demonstrating the **Elite Generalist** framework's **Computational Arbitrage** pillar: replacing brute-force O(N²) pairwise computation with a bottom-up fold over the hierarchy **Component → ComponentVector → Entity → System**, accelerated by Double Run-Length Encoding ("Mathematical Jumping") to achieve O(log N) per-step on structured inputs.
 
-> Workflow plan: see [`../skills.md`](../skills.md) for the full 10-phase design document.
+> 🌐 **Live demo (runs in your browser, no install):** https://testdemoqwenai2025-creator.github.io/testdemo2025qwenai-creator/
+>
+> A 1:1 vanilla-JS port of the Phase 12 web tier (frontend + middleware + IndexedDB-backed routes + physics engine) served via GitHub Pages. Create a system, step the integrator, watch trajectory + energy drift update in real time — all observable in the audit log panel.
+
+> Workflow plan: see [`../skills.md`](../skills.md) for the full 12-phase design document.
 
 ## Status
 

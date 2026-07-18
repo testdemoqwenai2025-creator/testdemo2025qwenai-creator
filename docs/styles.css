@@ -1,0 +1,276 @@
+/* ============================================================================
+ * nbody-fold-scala — Live Demo stylesheet
+ * ============================================================================
+ * Self-contained dark theme. No external fonts, no CSS frameworks.
+ * Mirrors the Scala Phase 12 Frontend.scala palette for visual continuity.
+ * ========================================================================== */
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: #0b1021;
+  color: #d4e1ff;
+  margin: 0;
+  padding: 0;
+  line-height: 1.5;
+  font-size: 14px;
+}
+
+header {
+  background: #1a2444;
+  padding: 14px 24px;
+  border-bottom: 1px solid #2c3a6b;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.badge {
+  background: #3b5bdb;
+  color: #fff;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+
+.repo-link {
+  color: #8aa3ff;
+  font-size: 13px;
+  text-decoration: none;
+  padding: 4px 10px;
+  border: 1px solid #2c3a6b;
+  border-radius: 4px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.repo-link:hover { background: #2c3a6b; border-color: #3b5bdb; }
+
+.stats-bar {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #0b1021;
+  border-radius: 4px;
+  font-size: 12px;
+  border: 1px solid #2c3a6b;
+}
+.stat b {
+  color: #8aa3ff;
+  font-weight: 500;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 16px;
+  padding: 16px;
+}
+
+@media (max-width: 900px) {
+  .grid { grid-template-columns: 1fr; }
+}
+
+.panel {
+  background: #131a36;
+  border: 1px solid #2c3a6b;
+  border-radius: 8px;
+  padding: 18px;
+}
+
+.panel h2 {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  color: #8aa3ff;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 600;
+}
+.panel h2.mt { margin-top: 26px; }
+
+label {
+  display: block;
+  margin: 8px 0 4px;
+  font-size: 12px;
+  color: #6b7fb3;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+input, textarea, button, select {
+  width: 100%;
+  padding: 7px 10px;
+  background: #0b1021;
+  color: #d4e1ff;
+  border: 1px solid #2c3a6b;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+textarea {
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  resize: vertical;
+}
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: #3b5bdb;
+  box-shadow: 0 0 0 2px rgba(59, 91, 219, 0.2);
+}
+
+button {
+  background: #3b5bdb;
+  border-color: #3b5bdb;
+  color: #fff;
+  cursor: pointer;
+  margin-top: 10px;
+  font-weight: 600;
+  font-size: 13px;
+  transition: background 0.15s, transform 0.05s;
+}
+button:hover { background: #4c6bff; }
+button:active { transform: translateY(1px); }
+button.secondary {
+  background: transparent;
+  color: #8aa3ff;
+  border-color: #2c3a6b;
+  font-weight: 500;
+  margin-top: 6px;
+}
+button.secondary:hover { background: #1a2444; border-color: #3b5bdb; }
+button.danger { background: #c92a2a; border-color: #c92a2a; }
+button.danger:hover { background: #e33838; }
+
+.row {
+  display: flex;
+  gap: 10px;
+  margin-top: 0;
+}
+.row > div { flex: 1; }
+
+.hint {
+  color: #6b7fb3;
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+pre {
+  background: #0b1021;
+  padding: 12px;
+  border-radius: 4px;
+  overflow: auto;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 240px;
+  border: 1px solid #2c3a6b;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+canvas {
+  background: #0b1021;
+  border: 1px solid #2c3a6b;
+  border-radius: 4px;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+}
+
+.log {
+  font-size: 11px;
+  line-height: 1.55;
+  color: #6b7fb3;
+  max-height: 220px;
+  overflow: auto;
+  background: #0b1021;
+  border-radius: 4px;
+  padding: 6px 8px;
+  border: 1px solid #2c3a6b;
+  font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+}
+.log .entry {
+  padding: 2px 0;
+  border-bottom: 1px dashed #1a2444;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.log .entry:last-child { border-bottom: none; }
+.log .ts { color: #8aa3ff; flex-shrink: 0; }
+.log .method { font-weight: 600; flex-shrink: 0; min-width: 56px; }
+.log .path { color: #d4e1ff; word-break: break-all; }
+.log .status { flex-shrink: 0; min-width: 36px; text-align: right; }
+.log .latency { color: #6b7fb3; flex-shrink: 0; }
+.log .ip { color: #fcc419; flex-shrink: 0; font-size: 10px; }
+.log .key { color: #51cf66; flex-shrink: 0; font-size: 10px; }
+.log .entry.error .status { color: #ff6b6b; }
+.log .entry.ok .status { color: #51cf66; }
+.log .entry.warn .status { color: #fcc419; }
+
+.chain {
+  margin: 0;
+  padding-left: 22px;
+  font-size: 12px;
+  color: #6b7fb3;
+  line-height: 1.7;
+}
+.chain li b { color: #8aa3ff; }
+.chain li code {
+  background: #0b1021;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: #d4e1ff;
+}
+
+footer {
+  padding: 20px 24px 30px;
+  text-align: center;
+  color: #6b7fb3;
+  font-size: 12px;
+  border-top: 1px solid #2c3a6b;
+  margin-top: 20px;
+}
+footer a { color: #8aa3ff; text-decoration: none; }
+footer a:hover { text-decoration: underline; }
+footer .hint { margin-top: 8px; display: block; }
+
+/* Small visual cue for the active system id input when it matches a real system */
+input#sysid.valid { border-color: #51cf66; }
+input#sysid.invalid { border-color: #ff6b6b; }

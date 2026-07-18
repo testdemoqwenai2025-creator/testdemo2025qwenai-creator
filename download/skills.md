@@ -325,3 +325,43 @@ The project is "scientifically complete" when:
 - Phase 2: `Json` AST + `JsonParser` — request/response body encoding (extended with `JNum`)
 - Phase 5: `Simulator.stepBodies` — the actual physics engine invoked by `POST /api/systems/:id/step`
 - Phase 11: `MessageDigest.getInstance("SHA-256")` pattern — reused for row integrity tags and HMAC request signing
+
+### Phase 12.b — Static GitHub Pages Demo (public-facing endpoint)
+
+**Goal:** Provide a permanent, clickable, zero-install URL where anyone in the world can observe the demo and play with the features. Served by GitHub Pages from the `main` branch's `/docs` folder. No backend server — the entire full-stack round-trip runs in the browser.
+
+**Why a static port:** GitHub Pages only serves static files (no Node.js runtime for the Next.js control plane, no JVM for the Scala backend). To meet the "always have an endpoint where folks with interest should be able to observe the demo" requirement, the Phase 12 web tier is ported 1:1 to vanilla JS so it runs entirely client-side. This is **not** a replacement for the Scala/Next.js backends — it's the public storefront for the same architecture.
+
+**Deliverables (in `/docs/` at repo root):**
+- `index.html` — UI shell: header with live health stats (uptime, system/body/snapshot/audit counts, middleware layer count), config panel (name/dt/softening/generator/N/seed/bodies JSON/API key), step panel (system id/steps/sample), audit log panel, trajectory canvas (x-y projection), energy drift canvas, middleware chain visualization, last-response `<pre>`, footer with repo links.
+- `styles.css` — dark theme mirroring the Scala `Frontend.scala` palette (#0b1021 bg, #3b5bdb accent, #8aa3ff secondary, monospace for log/pre). Sticky header, responsive grid (collapses to single column under 900px).
+- `db.js` — IndexedDB wrapper. 4 object stores (`Simulation`, `Body`, `Snapshot`, `ApiAudit`) mirroring the Prisma schema. Auto-incrementing IDs with monotonic counter. Cascade delete via cursor iteration. `dbGet/dbAll/dbWhere/dbInsert/dbPut/dbDelete/dbDeleteWhere/dbCount/dbClearAll` primitives.
+- `physics.js` — `MutableBodySystem` class. Parallel `Float64Array` storage for mass/pos/vel/acc. `computeAccelerations` (O(N²) brute force, Newton's third law symmetry), `step` (leapfrog KDK), `totalEnergy` (K+U with Plummer softening), `momentumMagnitude`, `angularMomentumMagnitude`, `snapshot`. Three initial-condition generators: `plummerSphere` (Aarseth 1974 simplified), `lattice` (cubic), `twoBody` (circular Kepler). `mulberry32` seeded RNG.
+- `middleware.js` — 6-layer middleware chain: `errorHandler` (try/catch → 500 JSON), `requestLogger` (FNV-1a IP hash, latency tracking, IndexedDB audit insert, `nbody:audit` CustomEvent for live UI), `authGate` (write methods require non-empty `x-api-key`, constant-time compare via XOR), `jsonBody` (parses JSON body string), `corsHandler` (Access-Control-Allow-* headers, OPTIONS short-circuit), `dispatcher` (injected by routes.js). `compose(middlewares, handler)` reduces right-to-left.
+- `routes.js` — 8 REST endpoints: `GET /api/health`, `GET /api/simulations`, `POST /api/simulations`, `GET /api/simulations/:id`, `DELETE /api/simulations/:id`, `POST /api/simulations/:id/step`, `GET /api/simulations/:id/snapshots`, `GET /api/audit`. Pattern-match dispatcher with `:param` extraction. Each handler reads/writes IndexedDB and returns a synthetic `Response` object (compatible with `fetch()` shape).
+- `app.js` — DOM wiring. `window.fetch` shim intercepts `/api/*` calls and routes them through the middleware chain → dispatcher → IndexedDB; all other fetches (static assets) hit the network normally. Health poll every 4s. Audit panel listens for `nbody:audit` CustomEvents. Canvas rendering: trajectory (per-body colored line, green start marker, red end marker, auto-scaled) + energy drift (grid lines, min/max labels, drift label). API key persisted in `localStorage`. System id validation (green border if exists, red if not).
+- `README.md` — architecture diagram + try-it guide + tier-by-tier Scala↔JS mapping table.
+
+**Verification:** `node /home/z/my-project/scripts/smoke-test.js` — 5/5 PASS:
+  1. Two-body Kepler energy drift = 2.3e-10 after 1000 steps (symplectic integrator correct)
+  2. Plummer sphere momentum magnitude bounded (5.2e-16 drift over 100 steps)
+  3. FNV-1a hash deterministic and distinct per input
+  4. `safeEqual` constant-time string compare correct
+  5. `redactKey` keeps only last 4 chars
+
+**Deployment:**
+1. Commit `/docs/` folder to `main` branch.
+2. Push to GitHub.
+3. Enable GitHub Pages via API: `POST /repos/{owner}/{repo}/pages` with `{"source":{"branch":"main","path":"/docs"}}`.
+4. Live URL: `https://testdemoqwenai2025-creator.github.io/testdemo2025qwenai-creator/`
+
+**Architecture reuse (static port):**
+- Phase 5 physics: 1:1 vanilla-JS port of `MutableKDK.scala` — same `Float64Array` storage, same KDK step structure, same Plummer softening.
+- Phase 12 Scala web tier: same middleware composition pattern (`Handler => Handler`), same route table, same DB schema (4 tables → 4 object stores).
+- Phase 11 Next.js control plane: same `src/middleware.ts` shape (FNV-1a IP hash, redactKey, safeEqual), same Prisma schema → IndexedDB store layout.
+
+**Standing directives (apply to all future phases):**
+1. **Update `skills.md` every phase** — keep this file synchronized with each new phase's spec.
+2. **GitHub push with every phase improvement** — automatic, no announcement needed.
+3. **Demo with frontend-visible output** — confirm the demo communicates with all components of the full stack (frontend ↔ middleware ↔ backend ↔ database), observable on the public GitHub Pages URL.
+4. **Each stage suggests what other modifications or improvements could be considered** — forward-looking recommendations appended to each phase.
