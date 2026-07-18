@@ -322,10 +322,16 @@
   let _animationStop = null;
 
   async function loadTrajectories(id) {
+    // Phase 18 fix: ALL /api/* calls must include X-Api-Key (the in-page
+    // auth middleware rejects any non-empty key check). POST /step already
+    // includes it; the GETs here were missing it → 401 → no trajectory
+    // data → empty canvas. Adding the header to every fetch in this path.
+    const authHeaders = { 'X-Api-Key': window.NBODY_API_KEY || 'demo' };
+
     // Phase 15: try the multi-body endpoint first; fall back to flat if missing.
     let byBody = null;
     try {
-      const resAll = await fetch('/api/systems/' + id + '/trajectories/all');
+      const resAll = await fetch('/api/systems/' + id + '/trajectories/all', { headers: authHeaders });
       if (resAll.ok) {
         const jAll = await resAll.json();
         byBody = jAll.byBody || [];
@@ -339,7 +345,7 @@
       _currentTrajectory = (byBody[0] && byBody[0].samples) || [];
     } else {
       // Legacy fallback: flat array
-      const res = await fetch('/api/systems/' + id + '/trajectories');
+      const res = await fetch('/api/systems/' + id + '/trajectories', { headers: authHeaders });
       const j = await res.json();
       _currentTrajectory = j.trajectories || [];
       _currentTrajectoriesByBody = [{ bodyId: 0, samples: _currentTrajectory }];
@@ -347,7 +353,7 @@
 
     // Also fetch the current body positions for the 3D renderer's "current state" dots
     try {
-      const sysRes = await fetch('/api/systems/' + id);
+      const sysRes = await fetch('/api/systems/' + id, { headers: authHeaders });
       const sysJ = await sysRes.json();
       _currentBodies = (sysJ.bodies || []).map(b => ({ x: b.x, y: b.y, z: b.z, mass: b.mass }));
     } catch (_) { _currentBodies = []; }

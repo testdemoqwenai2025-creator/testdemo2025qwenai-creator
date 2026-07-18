@@ -233,7 +233,7 @@
         }));
       } else {
         // Flat-array shape — wrap as single-body for backwards compat
-        this.trajectories = [{ bodyId: 0, samples: rowsOrBody }];
+        this.trajectories = [{ bodyId: 0, samples: rowsOrByBody }];
       }
     }
     setBodies(bodies)   { this.bodies = bodies || []; }
