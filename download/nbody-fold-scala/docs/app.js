@@ -19,6 +19,7 @@
 
   const MW = window.NBodyMiddleware;
   const R  = window.NBodyRoutes;
+  const $  = (id) => document.getElementById(id);   // Phase 16 shorthand
 
   // ── Mode detection ───────────────────────────────────────────────────────
   const urlParams = new URLSearchParams(window.location.search);
@@ -267,14 +268,40 @@
     // Phase 14: in dynamic mode, open the live stream BEFORE the POST so
     // we receive samples as they're computed server-side.
     if (IS_DYNAMIC) openLiveStream(id);
+    // Phase 16: instrument the step for telemetry (step duration + drift + N)
+    const _t0 = performance.now();
+    let _nBodies = 0;
+    try {
+      const sysRes = await fetch('/api/systems/' + id);
+      const sysJ = await sysRes.json();
+      _nBodies = (sysJ.bodies || []).length;
+    } catch (_) {}
     const res = await fetch('/api/systems/' + id + '/step', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Api-Key': 'demo' },
       body: JSON.stringify({ steps, sampleEvery })
     });
     const j = await res.json();
+    const _elapsed = performance.now() - _t0;
+    // Update telemetry (visible on the next card refresh)
+    if (typeof _tele !== 'undefined') {
+      _tele.lastStepMs = _elapsed;
+      _tele.lastStepN = _nBodies;
+      _tele.lastStepSteps = steps;
+      _tele.steps = (_tele.steps || 0) + steps;
+      if (j.drift !== undefined) _tele.drift = j.drift;
+      // Try to compute KE/PE breakdown from the system bodies
+      try {
+        const sysRes2 = await fetch('/api/systems/' + id);
+        const sysJ2 = await sysRes2.json();
+        const softening = parseFloat(document.getElementById('softening').value) || 0.05;
+        _recomputeEnergyBreakdown(sysJ2.bodies, softening);
+        _tele.bodies = (sysJ2.bodies || []).length;
+      } catch (_) {}
+      _updateTelemetryCards();
+    }
     if (j.drift !== undefined) {
-      appendAuditLog({ method: 'POST', path: '/api/systems/' + id + '/step', status: 200, ms: 0,
+      appendAuditLog({ method: 'POST', path: '/api/systems/' + id + '/step', status: 200, ms: Math.round(_elapsed),
                        meta: 'drift=' + j.drift.toExponential(3) });
     }
     refreshSystems();
@@ -610,14 +637,216 @@
   // Initial empty canvas paint so the canvas doesn't show the browser default
   renderTrajectory([]);
 
+  // ── Phase 16: Performance telemetry ─────────────────────────────────────
+  // Tracks FPS (from the 3D animation loop or a 1Hz fallback timer in 2D),
+  // step duration, throughput (N·steps/s), and the KE/PE/virial breakdown
+  // of the currently-loaded system. Updates the cards in the telemetry panel
+  // ~4×/s (fast enough to feel live, slow enough to be readable).
+  const _tele = {
+    fps: 0,
+    fpsFrames: 0,
+    fpsLastT: performance.now(),
+    lastStepMs: 0,
+    lastStepN: 0,
+    lastStepSteps: 0,
+    bodies: 0,
+    steps: 0,
+    drift: 0,
+    ke: 0, pe: 0, virial: 0
+  };
+  const _e0BySystem = {};   // {systemId: E0} — initial total energy, for drift
+
+  function _fmt(v, digits) {
+    if (v === null || v === undefined || isNaN(v)) return '—';
+    if (Math.abs(v) < 1e-3 && v !== 0) return v.toExponential(digits || 2);
+    if (Math.abs(v) > 1e4) return v.toExponential(digits || 2);
+    return (+v).toFixed(digits === undefined ? 2 : digits);
+  }
+
+  function _updateTelemetryCards() {
+    $('tele-fps').textContent = _fmt(_tele.fps, 0);
+    $('tele-bodies').textContent = _tele.bodies || '—';
+    $('tele-steps').textContent = _tele.steps || '—';
+    $('tele-steptime').textContent = _tele.lastStepSteps > 0
+      ? _fmt(_tele.lastStepMs / _tele.lastStepSteps, 2) : '—';
+    // Throughput = N * steps / total_seconds
+    const totalSec = _tele.lastStepMs / 1000;
+    const throughput = (_tele.lastStepN > 0 && totalSec > 0)
+      ? _tele.lastStepN * _tele.lastStepSteps / totalSec : 0;
+    $('tele-throughput').textContent = throughput > 0
+      ? _fmt(throughput, 0) : '—';
+    $('tele-drift').textContent = _tele.drift > 0
+      ? _tele.drift.toExponential(2) : '—';
+    $('tele-ke').textContent = _fmt(_tele.ke, 4);
+    $('tele-pe').textContent = _fmt(_tele.pe, 4);
+    $('tele-virial').textContent = _fmt(_tele.virial, 4);
+  }
+
+  function _recomputeEnergyBreakdown(bodies, softening) {
+    if (!bodies || bodies.length === 0) return;
+    try {
+      const br = window.NBodyPhysics.energyBreakdown(bodies, softening);
+      _tele.ke = br.ke;
+      _tele.pe = br.pe;
+      _tele.virial = br.virial;
+    } catch (_) { /* leave previous values */ }
+  }
+
+  // FPS counter — piggybacks on the 3D animation loop if active, otherwise
+  // runs its own 1Hz timer in 2D mode.
+  let _fpsTimer = setInterval(() => {
+    const now = performance.now();
+    const dt = (now - _tele.fpsLastT) / 1000;
+    if (_tele.fpsFrames > 0 && dt > 0) {
+      _tele.fps = Math.round(_tele.fpsFrames / dt);
+      _tele.fpsFrames = 0;
+      _tele.fpsLastT = now;
+      _updateTelemetryCards();
+    } else if (_viz3dRenderer && _is3DMode) {
+      // 3D loop handles its own frame counting via _onViz3DFrame
+    } else {
+      // Static 2D mode — report 0 FPS (no animation loop running)
+      _tele.fps = 0;
+      _tele.fpsLastT = now;
+      _updateTelemetryCards();
+    }
+  }, 500);
+
+  // Hook the 3D renderer's frame counter via a MutationObserver-free trick:
+  // we wrap _viz3dRenderer.startAnimationLoop once it's created.
+  // (Simpler approach: just count requestAnimationFrame invocations from
+  // anywhere by intercepting window.requestAnimationFrame once.)
+  const _origRAF = window.requestAnimationFrame.bind(window);
+  window.requestAnimationFrame = function (cb) {
+    return _origRAF((t) => {
+      _tele.fpsFrames++;
+      return cb(t);
+    });
+  };
+
+  // ── Phase 16: Scientific export (CSV / JSON) ────────────────────────────
+  function _download(filename, content, mime) {
+    const blob = new Blob([content], { type: mime || 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+  }
+
+  function _csvEscape(v) {
+    const s = String(v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  function _exportCSV() {
+    const rows = [['bodyId', 'step', 'x', 'y', 'z', 'vx', 'vy', 'vz', 'energy']];
+    for (const g of _currentTrajectoriesByBody) {
+      for (const s of g.samples) {
+        rows.push([g.bodyId, s.step, s.x, s.y, s.z, s.vx, s.vy, s.vz, s.energy].join(','));
+      }
+    }
+    const csv = rows.map(r => r.map(_csvEscape).join(',')).join('\n');
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    _download('nbody-trajectory-' + ts + '.csv', csv, 'text/csv');
+    _setExportStatus('CSV · ' + (rows.length - 1) + ' rows');
+  }
+
+  function _exportEnergyCSV() {
+    const rows = [['step', 'energy', 'drift_log10']];
+    const e0 = (_currentTrajectory[0] && _currentTrajectory[0].energy) || 0;
+    for (const s of _currentTrajectory) {
+      const drift = (e0 === 0) ? Math.abs(s.energy) : Math.abs((s.energy - e0) / e0);
+      rows.push([s.step, s.energy, drift > 0 ? Math.log10(drift).toFixed(6) : '-15']);
+    }
+    const csv = rows.map(r => r.map(_csvEscape).join(',')).join('\n');
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    _download('nbody-energy-' + ts + '.csv', csv, 'text/csv');
+    _setExportStatus('Energy CSV · ' + (rows.length - 1) + ' rows');
+  }
+
+  function _exportJSON() {
+    const payload = {
+      meta: {
+        exportedAt: new Date().toISOString(),
+        version: '1.0.0',
+        bodies: _currentBodies.length,
+        samples: _currentTrajectoriesByBody.reduce((a, g) => a + g.samples.length, 0)
+      },
+      bodies: _currentBodies,
+      trajectories: _currentTrajectoriesByBody
+    };
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    _download('nbody-system-' + ts + '.json', JSON.stringify(payload, null, 2), 'application/json');
+    _setExportStatus('JSON · ' + payload.meta.samples + ' samples');
+  }
+
+  let _exportStatusTimer = null;
+  function _setExportStatus(msg) {
+    const el = $('export-status');
+    if (!el) return;
+    el.textContent = msg;
+    if (_exportStatusTimer) clearTimeout(_exportStatusTimer);
+    _exportStatusTimer = setTimeout(() => { el.textContent = ''; }, 4000);
+  }
+
+  // Wire export buttons (only if they exist — they don't in older index.html)
+  const _exportCsvBtn = $('export-csv');
+  if (_exportCsvBtn) _exportCsvBtn.addEventListener('click', _exportCSV);
+  const _exportJsonBtn = $('export-json');
+  if (_exportJsonBtn) _exportJsonBtn.addEventListener('click', _exportJSON);
+  const _exportEnergyBtn = $('export-energy');
+  if (_exportEnergyBtn) _exportEnergyBtn.addEventListener('click', _exportEnergyCSV);
+
+  // ── Phase 17: register hooks for the tour controller ────────────────────
+  // The tour needs to (a) create systems, (b) switch viz mode, (c) push body
+  // updates back to app.js for telemetry, (d) read E0 per system for drift.
+  if (window.NBodyTour) {
+    window.NBodyTourParams = SCENARIO_PARAMS;
+    window.NBodyTour.createSystem = createSystem;
+    window.NBodyTour.setVizMode = setVizMode;
+    window.NBodyTour.setBodies = (bodies, id) => {
+      _currentBodies = bodies;
+      _tele.bodies = bodies.length;
+      // Recompute energy breakdown on every body push (cheap for small N)
+      const softening = parseFloat(document.getElementById('softening').value) || 0.05;
+      _recomputeEnergyBreakdown(bodies, softening);
+      // Record E0 if we haven't seen this system before
+      if (!_e0BySystem[id] && bodies.length > 0) {
+        try {
+          _e0BySystem[id] = window.NBodyPhysics.totalEnergy(bodies, softening);
+        } catch (_) {}
+      }
+      // Update drift if we have E0
+      if (_e0BySystem[id] && bodies.length > 0) {
+        try {
+          const e = window.NBodyPhysics.totalEnergy(bodies, softening);
+          _tele.drift = Math.abs((e - _e0BySystem[id]) / _e0BySystem[id]);
+        } catch (_) {}
+      }
+    };
+    window.NBodyTour.getE0 = (id) => _e0BySystem[id];
+  }
+
+  // Hook the step response so we can capture step duration + drift for telemetry
+  const _origStepSystem = stepSystem;
+  // (stepSystem is defined inside this IIFE — we can't reassign it cleanly here,
+  // so we instrument the step fetch directly. The simplest hook is to intercept
+  // the POST /step response. We do that by wrapping fetch once more — but only
+  // for /step paths — and recording timings.)
+
   // ── Phase 15: auto-run on first load ─────────────────────────────────────
   // The user explicitly asked to be able to "click on it and observe the
   // changes" — so on first page load we auto-run the Figure-8 scenario,
   // which is the most visually striking (three equal masses chasing each
   // other around the figure-8 curve). Skip auto-run if URL has ?noAuto=1
-  // (useful for benchmarks / CI).
+  // or ?tour=1 (the tour will run instead).
   const noAuto = urlParams.get('noAuto') === '1';
-  if (!noAuto) {
+  const autoTour = urlParams.get('tour') === '1';
+  if (autoTour && window.NBodyTour) {
+    // Wait for everything to settle, then start the tour
+    setTimeout(() => { window.NBodyTour.play(); }, 1200);
+  } else if (!noAuto) {
     // Wait briefly so the health poll fires first + the UI is settled
     setTimeout(() => { runScenario('figure8'); }, 600);
   }

@@ -109,6 +109,88 @@
       <p class="hint" id="viz-hint">2D projection (XY plane). Click 3D for a rotatable perspective view.</p>
     </section>
 
+    <!-- Phase 16: Performance telemetry + scientific export -->
+    <section class="panel">
+      <h2>Performance telemetry <small class="hint-inline">Phase 16 · live scientific metrics + CSV/JSON export</small></h2>
+      <div class="telemetry-grid">
+        <div class="tele-card">
+          <div class="tele-label">FPS</div>
+          <div class="tele-value" id="tele-fps">—</div>
+          <div class="tele-sub">render loop</div>
+        </div>
+        <div class="tele-card">
+          <div class="tele-label">bodies</div>
+          <div class="tele-value" id="tele-bodies">—</div>
+          <div class="tele-sub">N</div>
+        </div>
+        <div class="tele-card">
+          <div class="tele-label">steps</div>
+          <div class="tele-value" id="tele-steps">—</div>
+          <div class="tele-sub">elapsed</div>
+        </div>
+        <div class="tele-card">
+          <div class="tele-label">step time</div>
+          <div class="tele-value" id="tele-steptime">—</div>
+          <div class="tele-sub">ms / step</div>
+        </div>
+        <div class="tele-card">
+          <div class="tele-label">throughput</div>
+          <div class="tele-value" id="tele-throughput">—</div>
+          <div class="tele-sub">N·steps / s</div>
+        </div>
+        <div class="tele-card">
+          <div class="tele-label">energy drift</div>
+          <div class="tele-value" id="tele-drift">—</div>
+          <div class="tele-sub">|ΔE| / |E₀|</div>
+        </div>
+        <div class="tele-card">
+          <div class="tele-label">KE</div>
+          <div class="tele-value" id="tele-ke">—</div>
+          <div class="tele-sub">kinetic</div>
+        </div>
+        <div class="tele-card">
+          <div class="tele-label">PE</div>
+          <div class="tele-value" id="tele-pe">—</div>
+          <div class="tele-sub">potential</div>
+        </div>
+        <div class="tele-card">
+          <div class="tele-label">virial</div>
+          <div class="tele-value" id="tele-virial">—</div>
+          <div class="tele-sub">2KE + PE (≈0 bound)</div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <button id="export-csv" title="Download current trajectory as CSV">⬇ Export CSV</button>
+        <button id="export-json" title="Download current trajectory + system metadata as JSON">⬇ Export JSON</button>
+        <button id="export-energy" title="Download energy time-series as CSV">⬇ Export energy CSV</button>
+        <span class="hint-inline" id="export-status"></span>
+      </div>
+    </section>
+
+    <!-- Phase 17: Sonification + automated tour -->
+    <section class="panel">
+      <h2>Sound demo · automated tour <small class="hint-inline">Phase 17 · click ▶ Play tour</small></h2>
+      <div class="row">
+        <button id="tour-play" title="Play the full automated tour through every scenario with synchronized sound">▶ Play tour</button>
+        <button id="tour-pause" disabled>⏸ Pause</button>
+        <button id="tour-stop" disabled>⏹ Stop</button>
+        <button id="tour-skip" disabled>⏭ Skip</button>
+        <label class="tour-sound-toggle">
+          <input type="checkbox" id="tour-sound" checked>
+          <span>🔊 sound</span>
+        </label>
+        <span class="hint-inline" id="tour-status">idle</span>
+      </div>
+      <div class="tour-narration" id="tour-narration">
+        <div class="narration-title" id="narration-title">Welcome</div>
+        <div class="narration-body" id="narration-body">Press ▶ Play tour to start the automated demonstration. Each scenario will run with synchronized sonification — body positions drive oscillator frequencies, close encounters trigger percussion, and energy drift modulates an ambient drone.</div>
+        <div class="narration-progress">
+          <div class="narration-progress-bar" id="narration-progress-bar"></div>
+        </div>
+        <div class="narration-step" id="narration-step">scenario 0 / 6</div>
+      </div>
+    </section>
+
     <section class="panel">
       <h2>Audit log <small>(recent 50)</small></h2>
       <pre id="audit-log">— no requests yet —</pre>
@@ -124,12 +206,15 @@
   </footer>
 
   <!-- Scripts loaded in order: physics first (no deps), then db, middleware,
-       routes, viz3d (3D engine), then app.js (the main controller). -->
+       routes, viz3d (3D engine), sonify (Phase 17 Web Audio), tour (Phase 17
+       automated tour controller), then app.js (the main controller). -->
   <script src="physics.js"></script>
   <script src="db.js"></script>
   <script src="middleware.js"></script>
   <script src="routes.js"></script>
   <script src="viz3d.js"></script>
+  <script src="sonify.js"></script>
+  <script src="tour.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

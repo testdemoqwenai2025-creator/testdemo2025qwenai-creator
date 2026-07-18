@@ -156,6 +156,40 @@
     return ke + pe;
   }
 
+  // Phase 16: KE/PE breakdown — used by the telemetry panel to show
+  // the virial ratio 2KE + PE (≈0 for a bound relaxed system) and to
+  // visualize the energy partition on the energy chart.
+  function energyBreakdownTyped(n, px, py, pz, vx, vy, vz, mass, softening) {
+    softening = (softening === undefined) ? DefaultSoftening : softening;
+    let ke = 0, pe = 0;
+    const eps2 = softening * softening;
+    for (let i = 0; i < n; i++) {
+      ke += 0.5 * mass[i] * (vx[i] * vx[i] + vy[i] * vy[i] + vz[i] * vz[i]);
+      for (let j = i + 1; j < n; j++) {
+        const dx = px[j] - px[i];
+        const dy = py[j] - py[i];
+        const dz = pz[j] - pz[i];
+        const r = Math.sqrt(dx * dx + dy * dy + dz * dz + eps2);
+        pe -= G * mass[i] * mass[j] / r;
+      }
+    }
+    return { ke, pe, total: ke + pe, virial: 2 * ke + pe };
+  }
+
+  function energyBreakdown(bodies, eps) {
+    const n = bodies.length;
+    const px = new Float64Array(n), py = new Float64Array(n), pz = new Float64Array(n);
+    const vx = new Float64Array(n), vy = new Float64Array(n), vz = new Float64Array(n);
+    const mass = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const b = bodies[i];
+      px[i] = +b.x; py[i] = +b.y; pz[i] = +b.z;
+      vx[i] = +b.vx; vy[i] = +b.vy; vz[i] = +b.vz;
+      mass[i] = +b.mass;
+    }
+    return energyBreakdownTyped(n, px, py, pz, vx, vy, vz, mass, eps);
+  }
+
   function totalEnergy(bodies, eps) {
     const n = bodies.length;
     const px = new Float64Array(n), py = new Float64Array(n), pz = new Float64Array(n);
@@ -371,7 +405,9 @@
     binaryWithPlanet,   // Phase 15
     totalEnergy,
     totalMomentum,
-    totalEnergyTyped
+    totalEnergyTyped,
+    energyBreakdown,        // Phase 16: KE/PE split + virial ratio
+    energyBreakdownTyped    // Phase 16: typed-array fast path
   };
 
 })(typeof window !== 'undefined' ? window : globalThis);

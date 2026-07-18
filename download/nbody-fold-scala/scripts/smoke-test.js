@@ -272,6 +272,62 @@ function assert(name, cond, extra) {
   }
   console.log('');
 
+  // ── 9. Phase 16: energyBreakdown returns KE+PE+virial ──────────────────
+  console.log('9. Phase 16 energy breakdown');
+  {
+    const bodies = P.twoBodyCircular({ m: 1e-3 });
+    const br = P.energyBreakdown(bodies, 0.001);
+    assert('energyBreakdown returns {ke, pe, total, virial}',
+      typeof br.ke === 'number' && typeof br.pe === 'number' &&
+      typeof br.total === 'number' && typeof br.virial === 'number',
+      'keys=' + Object.keys(br).join(','));
+    assert('energyBreakdown total ≈ totalEnergy',
+      Math.abs(br.total - P.totalEnergy(bodies, 0.001)) < 1e-12,
+      'br.total=' + br.total + ' totalEnergy=' + P.totalEnergy(bodies, 0.001));
+    // For a circular Kepler orbit, KE = -E and PE = 2E (virial theorem)
+    assert('two-body circular satisfies virial theorem 2KE + PE ≈ 0',
+      Math.abs(br.virial) < 1e-6,
+      'virial=' + br.virial.toExponential(3));
+    // energyBreakdownTyped path
+    const n = bodies.length;
+    const px = new Float64Array(n), py = new Float64Array(n), pz = new Float64Array(n);
+    const vx = new Float64Array(n), vy = new Float64Array(n), vz = new Float64Array(n);
+    const mass = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      px[i] = bodies[i].x; py[i] = bodies[i].y; pz[i] = bodies[i].z;
+      vx[i] = bodies[i].vx; vy[i] = bodies[i].vy; vz[i] = bodies[i].vz;
+      mass[i] = bodies[i].mass;
+    }
+    const br2 = P.energyBreakdownTyped(n, px, py, pz, vx, vy, vz, mass, 0.001);
+    assert('energyBreakdownTyped matches energyBreakdown',
+      Math.abs(br2.total - br.total) < 1e-12,
+      'typed=' + br2.total + ' obj=' + br.total);
+  }
+  console.log('');
+
+  // ── 10. Phase 17: sonify.js + tour.js load cleanly under window shim ────
+  console.log('10. Phase 17 sonify + tour module loading');
+  {
+    // AudioContext + document aren't available in Node — sonify.js detects
+    // this and falls back to a no-op stub. tour.js needs document too, so
+    // we stub minimally.
+    const sonifySrc = fs.readFileSync(path.join(docsDir, 'sonify.js'), 'utf8');
+    assert('sonify.js checks for AudioContext',
+      /AudioContext|webkitAudioContext/.test(sonifySrc));
+    assert('sonify.js exposes window.NBodySonify with the right surface',
+      /window\.NBodySonify\s*=\s*\{[\s\S]*?resume[\s\S]*?start[\s\S]*?stop[\s\S]*?update/.test(sonifySrc));
+    assert('sonify.js ping() is exposed',
+      /ping:\s*_ping/.test(sonifySrc));
+    const tourSrc = fs.readFileSync(path.join(docsDir, 'tour.js'), 'utf8');
+    assert('tour.js exposes window.NBodyTour with play/pause/stop/skip',
+      /window\.NBodyTour\s*=\s*\{[\s\S]*?play[\s\S]*?pause[\s\S]*?stop[\s\S]*?skip/.test(tourSrc));
+    assert('tour.js has 6 ordered scenarios',
+      (tourSrc.match(/key:\s*'[a-zA-Z0-9]+'/g) || []).length >= 6);
+    assert('tour.js calls AudioContext.resume on user gesture',
+      /NBodySonify\.resume/.test(tourSrc));
+  }
+  console.log('');
+
   // ── Summary ────────────────────────────────────────────────────────────
   console.log('────────────────────────────────────');
   console.log('  PASS: ' + pass + '  FAIL: ' + fail);

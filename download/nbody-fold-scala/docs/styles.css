@@ -291,3 +291,103 @@ footer code {
 }
 footer a { color: var(--accent); text-decoration: none; }
 footer a:hover { text-decoration: underline; }
+
+/* ── Phase 16: telemetry cards ────────────────────────────────────── */
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+}
+.tele-card {
+  background: #000000;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 10px 8px 8px;
+  text-align: center;
+  transition: border-color 0.2s ease;
+}
+.tele-card:hover { border-color: var(--accent); }
+.tele-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+.tele-value {
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.2;
+  word-break: break-all;
+}
+.tele-sub {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+/* ── Phase 17: tour narration panel ───────────────────────────────── */
+.tour-sound-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.tour-sound-toggle input { cursor: pointer; }
+
+.tour-narration {
+  margin-top: 14px;
+  padding: 16px;
+  background: #000000;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  min-height: 110px;
+  position: relative;
+}
+.narration-title {
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 6px;
+}
+.narration-body {
+  font-family: var(--sans);
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+.narration-progress {
+  position: absolute;
+  bottom: 10px;
+  left: 16px;
+  right: 16px;
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.narration-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--green) 100%);
+  transition: width 0.3s ease;
+}
+.narration-step {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+}
